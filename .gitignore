@@ -98,12 +98,13 @@ whatsapp/.wwebjs_cache/
 *.db
 *.sqlite
 *.sqlite3
-db/
-data/
+/db/
+/data/
 postgres-data/
 pgdata/
 *.sql.gz
 *.dump
+# Note: /db/ with leading slash only ignores root-level db/, not backend/app/db/
 
 # ===== Secrets & Credentials =====
 *.key
