@@ -1,0 +1,12 @@
+Sr No,Lender,Product Program,Min. Vintage,Min. Score,Min. Turnover,Max Ticket size,Disb Till date,ABB,Entity,Age,Minimum Turnover,No 30+,60+,90+,Enquiries,No Overdues,EMI bounce,Bureau Check,Banking Statement,Bank Source,Ownership Proof,GST,Tele PD,Video KYC,FI,KYC Doc,Tenor Min,Tenor Max
+1,Indifi,BL,2,650,24L,30L,500,>=25k,Pvt Ltd LLP Proprietorship,22-65,24L,6 months,12 months,12 months,Max 5 in 6m,NA,Max 2,Standard bureau check,6 months,AA PDF,NA,Mandatory,Yes,No,NA,PAN Aadhaar GST,12,36
+2,Bajaj,STBL,2,700,36L,50L,1000,>=50k or 15% of EMI,Pvt Ltd LLP,21-65,36L,6 months,12 months,12 months,Max 3,NA,Max 1,Strict bureau verification,12 months,AA,Yes,Mandatory,Yes,Yes,Yes,PAN Aadhaar Udyam GST,12,48
+3,Bajaj,HTBL,GST active - 2 years otherwise 3 years,750,60L,100L,2000,>=100k,Pvt Ltd,25-65,60L,6 months,12 months,12 months,Max 2,NA,None,Premium check,12 months,AA,Yes,Mandatory,Yes,Yes,Yes,PAN Aadhaar Udyam ITR,18,60
+4,Credit Saison,Digital,1.5,680,18L,25L,300,>=30k,Pvt Ltd LLP Proprietorship Partnership,22-60,18L,6 months,12 months,12 months,Max 4,NA,Max 2,Standard,6 months,AA PDF Scorme,NA,Yes,Yes,No,NA,PAN Aadhaar,6,36
+5,Tata Capital,Digital,2,690,30L,40L,800,>=40k,Pvt Ltd LLP,23-65,30L,6 months,12 months,12 months,Max 3,NA,Max 1,Detailed check,12 months,AA PDF,Yes,Mandatory,Yes,Yes,NA,PAN Aadhaar GST Udyam,12,60
+6,Tata Capital,Direct,3,720,48L,75L,1500,>=75k,Pvt Ltd,25-65,48L,6 months,12 months,12 months,Max 2,NA,None,Premium,12 months,AA,Yes,Mandatory,Yes,Yes,Yes,PAN Aadhaar ITR GST,18,72
+7,Lendingkart,BL,2,650,24L,30L,600,>=20k,Pvt Ltd LLP Proprietorship,21-65,24L,6 months,12 months,12 months,Max 6,NA,Max 3,Standard,6 months,AA PDF,NA,Mandatory,Yes,No,NA,PAN Aadhaar,9,36
+8,IIFL,Digital,2,700,36L,50L,900,>=50k,Pvt Ltd LLP,22-65,36L,6 months,12 months,12 months,Max 3,NA,Max 1,Standard,12 months,AA,Yes,Mandatory,Yes,No,Yes,PAN Aadhaar GST,12,48
+9,Clix Capital,STBL,2.5,720,42L,60L,700,>=60k,Pvt Ltd LLP,23-65,42L,6 months,12 months,12 months,Max 2,NA,None,Detailed,12 months,AA PDF,Yes,Mandatory,Yes,Yes,Yes,PAN Aadhaar Udyam GST,12,60
+10,FT Cash,BL,Policy not available,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
+11,ICICI,BL,Policy not available,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA

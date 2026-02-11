@@ -1,0 +1,17 @@
+🔥 BYPASS CACHE WITH URL VERSION PARAMETER
+
+If closing/reopening tabs doesn't work, try adding a version parameter to the URL:
+
+Instead of:
+http://localhost:8000
+
+Use:
+http://localhost:8000?v=20260211
+
+This tricks the browser into thinking it's a different page, bypassing ALL cache.
+
+Change the number if you need to reload again:
+http://localhost:8000?v=20260211b
+http://localhost:8000?v=20260211c
+
+This ALWAYS works because the browser treats ?v=xxx as a unique URL.

@@ -1,0 +1,66 @@
+services:
+  db:
+    image: postgres:16
+    container_name: dsa_case_os_db
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-dsa_case_os}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: dsa_case_os_backend
+    depends_on:
+      db:
+        condition: service_healthy
+      whatsapp:
+        condition: service_started
+    env_file:
+      - ../backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@db:5432/${DB_NAME:-dsa_case_os}
+      DATABASE_URL_SYNC: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@db:5432/${DB_NAME:-dsa_case_os}
+      SECRET_KEY: ${SECRET_KEY:-dsa-case-os-dev-key}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.moonshot.ai/v1}
+      LLM_MODEL: ${LLM_MODEL:-kimi-k2.5}
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_PATH: /app/uploads
+      WHATSAPP_SERVICE_URL: http://whatsapp:3001
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../backend:/app
+      - upload_data:/app/uploads
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  whatsapp:
+    build:
+      context: ../whatsapp-service
+      dockerfile: Dockerfile
+    container_name: dsa_case_os_whatsapp
+    environment:
+      PORT: 3001
+    ports:
+      - "3001:3001"
+    volumes:
+      - whatsapp_data:/app/.wwebjs_auth
+      - ../whatsapp-service:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  upload_data:
+  whatsapp_data:

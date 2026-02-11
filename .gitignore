@@ -1,0 +1,121 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.pyc
+*.pyo
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+dist/
+build/
+.next/
+.nuxt/
+*.log
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Uploads and temporary files
+uploads/
+/uploads/*
+!uploads/.gitkeep
+temp/
+tmp/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# ===== CRITICAL: WhatsApp Session Data (NEVER COMMIT!) =====
+.wwebjs_auth/
+.wwebjs_cache/
+**/wwebjs_auth/
+**/wwebjs_cache/
+whatsapp/sessions/
+whatsapp/.wwebjs_auth/
+whatsapp/.wwebjs_cache/
+**/.wwebjs_auth/**
+**/.wwebjs_cache/**
+
+# ===== Database Files =====
+*.db
+*.sqlite
+*.sqlite3
+db/
+data/
+postgres-data/
+pgdata/
+*.sql.gz
+*.dump
+
+# ===== Secrets & Credentials =====
+*.key
+*.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+credentials.json
+secrets.json
+config/secrets.*
+
+# ===== Backup Files =====
+*.bak
+*.backup
