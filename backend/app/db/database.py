@@ -144,8 +144,10 @@ async def get_asyncpg_pool() -> asyncpg.Pool:
     global _asyncpg_pool
 
     if _asyncpg_pool is None:
-        # Convert SQLAlchemy URL to asyncpg format
-        db_url = settings.DATABASE_URL_SYNC  # Use sync URL and convert
+        # Convert SQLAlchemy async URL to standard postgres URL for asyncpg
+        db_url = settings.DATABASE_URL
+        # Remove the +asyncpg driver specification
+        db_url = db_url.replace("postgresql+asyncpg://", "")
         db_url = db_url.replace("postgresql://", "")
 
         # Parse connection details
