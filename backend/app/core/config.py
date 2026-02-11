@@ -21,6 +21,19 @@ class Settings(BaseSettings):
         "postgresql://postgres:postgres@localhost:5432/dsa_case_os"
     )
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Railway sets DATABASE_URL as postgresql:// but we need postgresql+asyncpg://
+        if self.DATABASE_URL.startswith("postgresql://"):
+            self.DATABASE_URL = self.DATABASE_URL.replace(
+                "postgresql://", "postgresql+asyncpg://", 1
+            )
+        # Set sync URL from async URL if not explicitly set
+        if self.DATABASE_URL_SYNC.startswith("postgresql+asyncpg://"):
+            self.DATABASE_URL_SYNC = self.DATABASE_URL_SYNC.replace(
+                "postgresql+asyncpg://", "postgresql://", 1
+            )
+
     # Auth
     SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-key-change-in-prod")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
