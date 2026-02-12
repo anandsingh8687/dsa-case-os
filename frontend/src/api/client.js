@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+// Use environment variable for API URL, fallback to production URL
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://dsa-case-os-production.up.railway.app/api/v1';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,

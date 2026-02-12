@@ -13,6 +13,9 @@ import {
   Target
 } from 'lucide-react';
 
+// Use environment variable or production URL
+const APP_URL = import.meta.env.VITE_APP_URL || 'https://dsa-case-os-production.up.railway.app';
+
 const LandingPage = () => {
   const [activeDemo, setActiveDemo] = useState(0);
 
@@ -106,13 +109,13 @@ const LandingPage = () => {
           </div>
           <div className="flex space-x-4">
             <button
-              onClick={() => window.location.href = 'http://localhost:8000'}
+              onClick={() => window.location.href = APP_URL}
               className="px-6 py-2 text-white hover:text-blue-300 transition"
             >
               Sign In
             </button>
             <button
-              onClick={() => window.location.href = 'http://localhost:8000'}
+              onClick={() => window.location.href = APP_URL}
               className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
             >
               Get Started
@@ -138,7 +141,7 @@ const LandingPage = () => {
               </p>
               <div className="flex flex-col sm:flex-row gap-4 mb-8">
                 <button
-                  onClick={() => window.location.href = 'http://localhost:8000'}
+                  onClick={() => window.location.href = APP_URL}
                   className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition flex items-center justify-center space-x-2"
                 >
                   <span>Start Free Trial</span>
@@ -364,13 +367,13 @@ const LandingPage = () => {
           <p className="text-xl text-white/90 mb-8">Join hundreds of DSAs already using DSA Case OS</p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
-              onClick={() => window.location.href = 'http://localhost:8000'}
+              onClick={() => window.location.href = APP_URL}
               className="px-10 py-4 bg-white text-blue-600 rounded-lg font-bold text-lg hover:bg-gray-100 transition"
             >
               Start Free Trial
             </button>
             <button
-              onClick={() => window.location.href = 'http://localhost:8000'}
+              onClick={() => window.location.href = APP_URL}
               className="px-10 py-4 bg-white/20 text-white rounded-lg font-bold text-lg hover:bg-white/30 transition backdrop-blur"
             >
               Sign In
