@@ -80,14 +80,6 @@ async def _ensure_schema_tables() -> None:
     """
     pool = await get_asyncpg_pool()
     async with pool.acquire() as conn:
-        # Check if lenders table exists
-        exists = await conn.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'lenders')"
-        )
-        if exists:
-            logger.info("Schema tables already exist, skipping creation")
-            return
-
         # Read and execute schema.sql
         schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
         if not os.path.isfile(schema_path):
