@@ -1,0 +1,89 @@
+Sr No,Lender,Product Program,Min. Vintage,Min. Score,Min. Turnover,Max Ticket size,Disb Till date,ABB,Entity,Age,Minimum Turnover,No 30+,60+,90+,Enquiries,No Overdues,EMI bounce,Bureau Check,Banking Statement,Bank Source,Ownership Proof,GST,Tele PD,Video KYC,FI,KYC Doc,Tenor Min,Tenor Max
+2,Indifi,BL,1,730,10,30L,2.37, >=25k,"Proprietorship, Partnership, LLP and Pvt Ltd firms",22-65,75L,6 month ,12 month ,,7 in 12 months,>5K,,"30+ DPD in last 6 months should be nil
+60+ DPD in last 12 months should be nil
+ No current overdue <5K
+ Unsecured enquiries <= 7 in latest 12 months
+ Bureau tenure >= 12m
+ No. trades >=3
+ Highest Loan Borrowed >= 3L (excluding gold loan)
+PL/BL of >1L taken in last 3 months <3",6 months,AA,NA,"NA
+ Preference given to GST leads",Yes,Yes,Yes,"Pan, Aadhaar
+ Sole Prop: Any 2 registration docs or 1 proof + FI",6,36
+14,Credit Saison,SBL,2,650,25,10L,,"<=5 Lakhs : 1.10 times of proposed EMI
+ >5 lakhs, <=7.5 Lakhs : 1.25 times of proposed EMI
+ >7.5 lakhs, <=10 Lakhs : 1.5 times of proposed EsMI","Proprietor, Partnership/LLP",23-60,25L,3 months,,6 months,>9 - 6 months,,3 months,"Should not have 90+ within last 6 months excluding credit card and gold loans
+ Should not have 30+ within last 3 months excluding credit card and gold loan
+ Maximum 9 unsecured loans enquiries allowed in Last 6 months.
+ No EMI bounce due to IF in last 3 months, not more than 2 EMI bounces in last 6 months",6 months,,"One point ownership is mandatory, otherwise LA to be restricted to 5 lacs",Yes above 5 lacs LA for some cases,Mandatory for <5L,Mandatory for LA>5 lacs,Yes - Mandatory Resi FI and Office FI for all cases,,12,36
+5,Protium,BL,1,650,24,35L,,10k,"Self-employed Individuals, Proprietorship Firm, LLP, Partnership Firm, Private limited Co",23-65,24L,12 months,24 months,36 months,,>1k,90 days,"TU CIBIL V3 > 650
+ No 30+ in last 12 months
+ No 60+ in last 24 months
+ No 90+ in last 36 months
+ No 01+ in last 6 months
+ No ECS bounces in last 90 days.
+ Overdue amount should be less than INR 1000",12 months,AA = PDF + Net banking,NA,NA,NA,Yes,Only for selected cases,"Pan, Aadhar, Udhyam",12,36
+1,Bajaj,STBL,1,685,,3L,,10K,Proprietorship,24-65,30L,12 months,,,,,Nil - 3 months,"No 30+ in 12 months 
+ Nil Bounce in last 3months
+ >1 bounce due to non tech reason not allowed",12 months,AA,NA,NA,Yes,Yes,NA,Digilocker,12,60
+3,Arthmate,BL,1,725,20,50L,13.37,10k,"Proprietorship, Partnership, Private Ltd entities, Limited companies, LLP, Self-employed professionals",21-60,3L,3 months,6 months,12 months,,>5k,<= 2 in last 90 days,"Cheque return or EMI Bounce count should be <= 2 in last 90 days
+ Overdue>5K not allowed
+ >30 DPD in last 3 months with overdue>1K not allowed
+ >60 dpd in last 6 months with overdue>1K not allowed
+ >90 dpd in last 12 months with overdue>1K not allowed",6 months,Scorme,NA,Mandatory for >10L,Yes,NA,Yes for >2L,"PAN, Aadhaar",3,36
+9,Tata Capital,Digital,2,675,10,20L,0.21,15k,"Proprietorship, Partnership, LLP & Private Ltd company",30-65,NA,,,,,,,,6 months,,Yes,NA,Yes,NA,Yes,"Aadhaar, PAN",12,48
+25,Ambit,BL,3,675,50L,50L,"Proprietorship, Partnership, LLP & Private Ltd company",15K,"Proprietorship, Partnership, LLP & Private Ltd company",23-65,50L,,,,,Nil,Nil - 3 months,,6 months,,Yes,No,Yes,Yes,Yes,"Pan, Aadhar, Voter ID",12,36
+16,Bajaj,HTBL,GST active - 2 years otherwise 3 years,685,60,45L,5.78,15k,Self Employed Non Professional,24-70,40L,12 months,12 months,12 months,,,Nil - 6months,"685-720 - Zero DPD in last 12 month in EMI based Loan
+ > 720 - Nil 30+ DPD in last 12 month in EMI based Loan",6 months,,Yes -Either Residence or Office to be owned at any BFL location,NA,Yes,NA,Yes,"PAN, Aadhaar, udhyam aadhaar",12,60
+8,Flexiloans,BL,2,700,24,20L,0.79,15k,"Proprietorship, Partnership, LLP & Private Ltd company",21 - 65,24L,12 months,12 months,12 months,> 20 - 6 months,,,"-If there are 20 or more enquiries in the last 6
+ months and no disbursement against the same,
+ case will get rejected
+ -No DPDs allowed in last 12 months
+ -Not more than 4 unsecured loans disbursed in the
+ last 6 months",,,Yes,NA,,Yes,Yes,Udyam Aadhar required from every customer,12,36
+21,Tata Capital,Direct,3,725,100,90L,0.55,15k,"Proprietorship, Partnership, LLP & Private Ltd company",30-65,NA,,,,,,,,6 months,,Yes,NA,Yes,NA,Yes,"Aadhaar, PAN",12,48
+4,Lendingkart,BL,1,650,12,35L,5.76,20k,Proprietorship / Partnership / Pvt Ltd / Public Ltd / LLP/ Single owner company,23 - 60,12L,>2 - 6 months,,12 months,>30 In 6 months,,,"No 90+ in last 12 months on any tradeline
+ No LSS/DBT/SUB/SMA in last 18 months on any tradeline
+ No written off/settled in the last 18 months(in open & closed loans both) with a written off principal amount more than 5000.
+ Any suit filed/default ever to be rejected
+ No 30+ for >2 times in any loan in last 6 months
+ No. of Loan Enquiry in 6 months >30",12 months,AA + PDF,NA,NA,Yes,Yes for Prop,"Yes if VKYC not successful
+ above 25 L - FI mandatory for resi and office
+ 15-25 L - FI mandatory for office","Address proof , PAN, aadhaar",12,36
+10,NeoGrowth,NG Insta,2,700,-,25L,2.21,20k,,,,,,,,,,,,,NA,NA,,Yes,,,16,24
+11,NeoGrowth,NG Express,2,700,-,25L,,20k,,,,,,,,,,,,,NA,NA,,Yes,,,,24
+24,NeoGrowth,NG Retails,,,-,35L,,25K,,,,,,,,,,,,,,,,,,,18,36
+6,IIFL,Digital,1,700,10,30L,2.46,8k,Self Employed profile (Individual/ Sole Proprietorship),23-65,,12 months,,18 months,,,,"-No Settled/W-off/Suit filed/SUB/SMA/DBT/LSS in last 18 months
+ -No restructured loan in last 24 months (excluding restructured due to Covid-19)
+ -No 1+ DPD in tradeline with restructured due to Covid-19 in last 12 months
+ Loan tradelines: Excluding Credit Card/GL/KCC/EL
+ -Dpd up to 7 days not more than 2 times in last 6 months
+ -No 30+ DPD in last 12 months
+ -No 90+ in last 18 months
+ Account Type: Credit Card/GL/KCC/EL
+ -No 20+ DPD > 3 times in last 6 months
+ -No 30+ in last 6 months
+ No 60+ in 12 months",6 months,,"Ownership proof mandatory for Loan amount > 10 lakhs (Not mandatory if Active
+ Home Loan/Loan Against Property Running in Individual/Joint Capacity)
+ • In case own property is in name of father/mother/spouse/children/grandparents of
+ the applicants then it shall be deemed as applicant having ownership
+ • Ownership holder not to be taken in application.",Yes,,Live selfie,*FI/VPD mandatory if address mismatch with bureau records.,POI(PAN) and Address Proof (Aadhar),12,48
+19,ABFL,BL - Udyog+,3,700,5,15L,,"ABB of 1 of Proposed EMI if loan up to 5 lacs
+ if loan <=7.5 lacs then ABB of 1.25 of Proposed EMI
+ Loan amount <=10 lacs then ABB of 1.50 of Proposed EMI","Self Employed Individuals, Partnership Firm, Pvt. Ltd. Companies, Proprietorship",25-65,20L,12 months,,,60 days <=5,>10k,6 months,"1. Overdue in last 12 months >10k
+2.  More than 3 Live PL/BL with current outstanding >50k (Consider loans reported within last 3 months)
+3. Never reported 30+ DPD on term loans in last 12 months.
+4. Minimum 3 business credit transactions every month
+5. No EMI Bounce in last 3 months
+6. Maximum 1 EMI Bounce in three to six months",6 months,AA + PDF,Yes,NA,Yes,Yes,Yes,"Pan , aadhar, Udyam",12,36
+12,Clix Capital,STBL,2,700,,10L,,ABB TO EMI ratio of 2:1,"Self Employed Individuals, Partnership Firm, Pvt. Ltd. Companies",60,1 Cr,,,,>10 - 3 months,,,"All applicant, co applicant cibil will be check. Max. 10 cibil enquries unsecured instrument(latest 3 month for enquiry norms)
+ Max. 3 running loans (PL/SBL/BL)",6 months,AA,Yes,Yes,Yes,NA,Yes,"Udyam Aadhar. PAN , Aadhaar",12,36
+13,Clix Capital,HTBL,2,700,200,35L,,ABB TO EMI ratio of 2:1,"Self Employed Individuals, Partnership Firm, Pvt. Ltd. Companies",60,2 Cr,,,,>10 - 3 months,,,"All applicant, co applicant cibil will be check. Max. 10 cibil enquries unsecured instrument(latest 3 month for enquiry norms)
+ Max. 3 running loans (PL/SBL/BL)",6 months,AA,Yes,Yes,Yes,NA,Yes,"Udyam Aadhar. Pan, adhaar",12,36
+23,Clix Capital,MTBL,3,700,100,20L,,ABB TO EMI ratio of 2:1,"Self Employed Individuals, Partnership Firm, Pvt. Ltd. Companies",,2 Cr,,,,>10 - 3 months,,,"All applicant, co applicant cibil will be check. Max. 10 cibil enquries unsecured instrument(latest 3 month for enquiry norms)
+ Max. 3 running loans (PL/SBL/BL)",6 months,AA,Yes,Yes,Yes,NA,Yes,"Udyam Aadhar. PAN, Adhaar",12,36
+22,IIFL,HTBL,3,700,100,10-35L,,ABB to EMI to be >= 1.5x,Self Employed profile: Sole Proprietorship/ Partnership/ Private Limited/ LLP/ OPC/ Unlisted Public Company,24-65,,,,,,,,,6 months,,Yes,Yes,,,,"Pan, Aadhar, Udhyam",12,36
+7,FT Cash,BL,1.5,675,24,,,Policy not available,,,,,,,,,,,,,,,,,,,,
+15,ICICI,OD,2,700,5,50L,1.55,Policy not available,,,,,,,,,,,,,,,,,,,,
+18,Cholamandalam,BL,3,675,100,20L,,Policy not available,,,,,,,,,,,,,,,,,,,,
+20,UGro,BL,3,650,20,50L,0.33,,"Proprietor, Partnership/LLP",21-75,40L for manufacturer & 20L for trader/service,,,,,,>2 - 6months,Maximum 2 EMI Bounces in last 6 months is allowed.,,,Yes,Yes - At least 70% of the GST turnover in the latest 12 months to be reflected in Banking credits,,,FI to be done for both Residence and Office,,,36
+17,Godrej,BL,3,700,80,50L,0.64,,Self Employed Non Professional & Self Employed,21-65,50L,,,,,,,,6 months,,Yes,,,Yes,Yes,,12,48
