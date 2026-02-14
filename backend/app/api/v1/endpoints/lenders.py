@@ -198,49 +198,6 @@ async def check_pincode_coverage(pincode: str):
     return coverage
 
 
-@router.get("/pincodes/{pincode}/details")
-async def get_pincode_lender_details(
-    pincode: str,
-    include_market_summary: bool = Query(False, description="Generate AI market summary")
-):
-    """Get detailed lender information for a pincode (Fix 5: Pincode Checker).
-
-    This is a user-friendly endpoint for the standalone pincode checker page.
-    Returns lenders with their product offerings and key eligibility parameters.
-
-    Args:
-        pincode: 6-digit pincode
-        include_market_summary: If True, generates an LLM-powered market intelligence summary
-
-    Returns:
-        - Pincode location info
-        - List of lenders with products, CIBIL cutoffs, and max tickets
-        - Optional: AI-generated market summary for DSAs
-    """
-    if not pincode or len(pincode) != 6 or not pincode.isdigit():
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid pincode. Must be a 6-digit number."
-        )
-
-    # Get detailed lender data
-    lender_details = await lender_service.get_pincode_lender_details(pincode)
-
-    response = {
-        "pincode": pincode,
-        "lender_count": len(lender_details),
-        "lenders": lender_details
-    }
-
-    # Generate market summary with LLM if requested
-    if include_market_summary and lender_details:
-        from app.services.llm_service import generate_pincode_market_summary
-        summary = await generate_pincode_market_summary(pincode, lender_details)
-        response["market_summary"] = summary
-
-    return response
-
-
 # ═══════════════════════════════════════════════════════════════
 # PRODUCT QUERY ENDPOINTS (for Eligibility Engine)
 # ═══════════════════════════════════════════════════════════════

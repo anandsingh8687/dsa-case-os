@@ -6,7 +6,6 @@ import {
   MessageSquare,
   Building2,
   Settings,
-  MapPin,
 } from 'lucide-react';
 
 const Sidebar = () => {
@@ -14,7 +13,6 @@ const Sidebar = () => {
     { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/cases/new', icon: FilePlus, label: 'New Case' },
     { to: '/copilot', icon: MessageSquare, label: 'Copilot' },
-    { to: '/pincode-checker', icon: MapPin, label: 'Pincode Checker' },
     { to: '/lenders', icon: Building2, label: 'Lenders' },
     { to: '/settings', icon: Settings, label: 'Settings' },
   ];

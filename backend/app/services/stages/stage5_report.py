@@ -418,7 +418,7 @@ async def generate_submission_strategy(
 {borrower.full_name or 'The borrower'} operates as a {borrower.entity_type or 'business entity'} with {borrower.business_vintage_years or 'N/A'} years of market presence, representing a {business_maturity} enterprise in the {borrower.industry_type or 'business'} sector. Their financial profile shows:
 - Credit standing: {credit_profile} (CIBIL: {borrower.cibil_score or 'pending'})
 - Monthly cash flow: ₹{(borrower.monthly_turnover or borrower.monthly_credit_avg or 0) / 100000:.2f} Lakhs
-- Banking relationship strength: Average balance of ₹{(borrower.avg_monthly_balance or 0) / 100000:.2f} Lakhs
+- Banking relationship strength: Average balance of ₹{(borrower.avg_bank_balance or 0) / 100000:.2f} Lakhs
 - Growth ambition: Seeking ₹{borrower.loan_amount_requested or 'N/A'} Lakhs to fuel expansion
 
 **THE OPPORTUNITY LANDSCAPE:**
