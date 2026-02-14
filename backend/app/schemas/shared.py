@@ -243,6 +243,7 @@ class EligibilityResult(BaseModel):
     product_name: str
     hard_filter_status: HardFilterStatus
     hard_filter_details: Dict[str, Any] = {}
+    friendly_explanations: Dict[str, str] = {}  # Fix 4: Human-readable explanations
     eligibility_score: Optional[float] = None        # 0-100
     approval_probability: Optional[ApprovalProbability] = None
     expected_ticket_min: Optional[float] = None
@@ -260,6 +261,7 @@ class EligibilityResponse(BaseModel):
     rejection_reasons: List[str] = []        # Why lenders rejected (when lenders_passed = 0)
     suggested_actions: List[str] = []        # What borrower can improve
     dynamic_recommendations: List[Dict[str, Any]] = []  # Prioritized recommendations with impact analysis
+    llm_summary: Optional[Dict[str, Any]] = None  # Fix 4: LLM-generated eligibility clarity
 
 
 # ─── Case Report ───────────────────────────────────────────────

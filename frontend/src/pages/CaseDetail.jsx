@@ -489,6 +489,106 @@ const CaseDetail = () => {
 
             {eligibility.results && eligibility.results.length > 0 ? (
               <>
+                {/* Fix 4: LLM Eligibility Clarity Summary */}
+                {eligibility.llm_summary && (
+                  <div className="mb-6 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-6">
+                    <div className="flex items-start gap-3 mb-4">
+                      <div className="flex-shrink-0 w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center">
+                        <span className="text-white text-lg">✨</span>
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="font-semibold text-blue-900 mb-2 text-lg">AI Eligibility Analysis</h4>
+                        <p className="text-sm text-blue-800 leading-relaxed">
+                          {eligibility.llm_summary.overall_summary}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Top Improvements */}
+                    {eligibility.llm_summary.top_improvements && eligibility.llm_summary.top_improvements.length > 0 && (
+                      <div className="mt-4 bg-white rounded-lg p-4">
+                        <h5 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                          <span>💡</span>
+                          <span>Top Recommendations to Improve Eligibility:</span>
+                        </h5>
+                        <div className="space-y-2">
+                          {eligibility.llm_summary.top_improvements.map((improvement, idx) => (
+                            <div key={idx} className="flex items-start gap-2">
+                              <span className="text-blue-600 font-semibold mt-0.5">{idx + 1}.</span>
+                              <span className="text-sm text-gray-700">{improvement}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Lender-specific Explanations */}
+                    {eligibility.llm_summary.lender_explanations && Object.keys(eligibility.llm_summary.lender_explanations).length > 0 && (
+                      <div className="mt-4 bg-white rounded-lg p-4">
+                        <h5 className="font-semibold text-gray-800 mb-3">Why Specific Lenders Rejected:</h5>
+                        <div className="space-y-3">
+                          {Object.entries(eligibility.llm_summary.lender_explanations).slice(0, 5).map(([lender, explanation]) => (
+                            <div key={lender} className="border-l-4 border-red-400 pl-3">
+                              <div className="font-medium text-gray-900 text-sm">{lender}</div>
+                              <div className="text-xs text-gray-600 mt-1">{explanation}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Dynamic Recommendations (Fix 4) - Show for all cases */}
+                {eligibility.dynamic_recommendations && eligibility.dynamic_recommendations.length > 0 && (
+                  <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-lg p-6">
+                    <h4 className="font-semibold text-yellow-800 mb-4 text-lg flex items-center gap-2">
+                      <span>🎯</span>
+                      <span>Prioritized Improvement Opportunities</span>
+                    </h4>
+                    <p className="text-sm text-yellow-700 mb-4">
+                      Here are the top improvements that would unlock the most lenders for you:
+                    </p>
+
+                    <div className="space-y-4">
+                      {eligibility.dynamic_recommendations.slice(0, 5).map((rec, idx) => (
+                        <div key={idx} className="bg-white rounded-lg p-4 shadow-sm">
+                          <div className="flex items-start justify-between mb-2">
+                            <div className="flex items-start gap-3">
+                              <div className="flex-shrink-0 w-8 h-8 bg-yellow-600 text-white rounded-full flex items-center justify-center font-bold text-sm">
+                                {rec.priority_rank}
+                              </div>
+                              <div>
+                                <h5 className="font-semibold text-gray-900">{rec.issue}</h5>
+                                <div className="text-xs text-gray-600 mt-1 space-y-1">
+                                  <div><span className="font-medium">Current:</span> {rec.current || 'Not available'}</div>
+                                  <div><span className="font-medium">Target:</span> {rec.target || 'N/A'}</div>
+                                </div>
+                              </div>
+                            </div>
+                            <Badge variant="warning" className="whitespace-nowrap">
+                              +{rec.priority} lenders
+                            </Badge>
+                          </div>
+
+                          <div className="mt-3 pl-11">
+                            <p className="text-sm text-gray-700">
+                              <span className="font-medium text-blue-700">Action: </span>
+                              {rec.action}
+                            </p>
+                            {rec.lenders_affected && rec.lenders_affected.length > 0 && (
+                              <p className="text-xs text-gray-500 mt-2">
+                                Would unlock: {rec.lenders_affected.slice(0, 3).join(', ')}
+                                {rec.lenders_affected.length > 3 && ` and ${rec.lenders_affected.length - 3} more`}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Rejection Analysis - Only show when no lenders passed */}
                 {eligibility.lenders_passed === 0 && eligibility.rejection_reasons && eligibility.rejection_reasons.length > 0 && (
                   <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-6">
@@ -521,64 +621,136 @@ const CaseDetail = () => {
                   {eligibility.lenders_passed} of {eligibility.total_lenders_evaluated} lenders matched
                   {eligibility.lenders_passed === 0 && ' - See analysis above for improvement suggestions'}
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                          Rank
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                          Lender
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                          Score
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                          Probability
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                          Max Ticket
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {eligibility.results
-                        .filter((r) => r.eligible)
-                        .map((result, index) => (
-                          <tr key={result.lender_name}>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                              #{index + 1}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap font-medium">
-                              {result.lender_name}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <span className="text-lg font-bold text-primary">
-                                {result.score}/100
-                              </span>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <Badge
-                                variant={
-                                  result.probability === 'HIGH'
-                                    ? 'success'
-                                    : result.probability === 'MEDIUM'
-                                    ? 'warning'
-                                    : 'danger'
-                                }
-                              >
-                                {result.probability}
-                              </Badge>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap font-medium">
-                              {formatCurrency(result.max_ticket_size)}
-                            </td>
+
+                {/* Passed Lenders Table */}
+                {eligibility.lenders_passed > 0 && (
+                  <div className="mb-8">
+                    <h3 className="text-lg font-semibold text-green-700 mb-3">✓ Eligible Lenders</h3>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                              Rank
+                            </th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                              Lender
+                            </th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                              Product
+                            </th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                              Score
+                            </th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                              Probability
+                            </th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                              Max Ticket
+                            </th>
                           </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {eligibility.results
+                            .filter((r) => r.hard_filter_status === 'PASS')
+                            .map((result) => (
+                              <tr key={`${result.lender_name}-${result.product_name}`}>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                  #{result.rank}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap font-medium">
+                                  {result.lender_name}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                                  {result.product_name}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <span className="text-lg font-bold text-green-600">
+                                    {result.eligibility_score}/100
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <Badge
+                                    variant={
+                                      result.approval_probability === 'HIGH'
+                                        ? 'success'
+                                        : result.approval_probability === 'MEDIUM'
+                                        ? 'warning'
+                                        : 'danger'
+                                    }
+                                  >
+                                    {result.approval_probability}
+                                  </Badge>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap font-medium">
+                                  {result.expected_ticket_max ? `₹${result.expected_ticket_max.toFixed(1)}L` : 'N/A'}
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Fix 4: Failed Lenders with Friendly Explanations */}
+                {eligibility.results.filter((r) => r.hard_filter_status === 'FAIL').length > 0 && (
+                  <div>
+                    <h3 className="text-lg font-semibold text-red-700 mb-3">✗ Ineligible Lenders</h3>
+                    <div className="space-y-3">
+                      {eligibility.results
+                        .filter((r) => r.hard_filter_status === 'FAIL')
+                        .slice(0, 10)
+                        .map((result) => (
+                          <div
+                            key={`${result.lender_name}-${result.product_name}`}
+                            className="bg-red-50 border border-red-200 rounded-lg p-4"
+                          >
+                            <div className="flex items-start justify-between mb-2">
+                              <div>
+                                <h4 className="font-semibold text-gray-900">{result.lender_name}</h4>
+                                <p className="text-sm text-gray-600">{result.product_name}</p>
+                              </div>
+                              <Badge variant="danger">Not Eligible</Badge>
+                            </div>
+
+                            {/* Friendly Explanations */}
+                            {result.friendly_explanations && Object.keys(result.friendly_explanations).length > 0 && (
+                              <div className="mt-3 space-y-2">
+                                <p className="text-xs font-semibold text-gray-700 uppercase">Reasons:</p>
+                                {Object.entries(result.friendly_explanations).map(([filterName, explanation]) => (
+                                  <div key={filterName} className="flex items-start gap-2">
+                                    <span className="text-red-600 text-xs mt-0.5">●</span>
+                                    <span className="text-sm text-red-800">{explanation}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Fallback to technical details if no friendly explanations */}
+                            {(!result.friendly_explanations || Object.keys(result.friendly_explanations).length === 0) &&
+                             result.hard_filter_details && Object.keys(result.hard_filter_details).length > 0 && (
+                              <div className="mt-3 space-y-2">
+                                <p className="text-xs font-semibold text-gray-700 uppercase">Reasons:</p>
+                                {Object.entries(result.hard_filter_details).map(([filterName, detail]) => (
+                                  <div key={filterName} className="flex items-start gap-2">
+                                    <span className="text-red-600 text-xs mt-0.5">●</span>
+                                    <span className="text-sm text-red-800">{detail}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         ))}
-                    </tbody>
-                  </table>
-                </div>
+
+                      {eligibility.results.filter((r) => r.hard_filter_status === 'FAIL').length > 10 && (
+                        <p className="text-sm text-gray-500 text-center py-2">
+                          +{eligibility.results.filter((r) => r.hard_filter_status === 'FAIL').length - 10} more lenders not shown
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </>
             ) : (
               <p className="text-gray-500 text-center py-8">

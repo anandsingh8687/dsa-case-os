@@ -27,6 +27,88 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════
+# FIX 4: HUMAN-READABLE EXPLANATIONS
+# ═══════════════════════════════════════════════════════════════
+
+def translate_filter_failure_to_friendly_text(
+    filter_name: str,
+    technical_detail: str,
+    borrower: BorrowerFeatureVector
+) -> str:
+    """Transform technical filter failures into DSA-friendly language (Fix 4).
+
+    Args:
+        filter_name: The filter that failed (e.g., "cibil_score", "vintage")
+        technical_detail: Technical message (e.g., "CIBIL 620 < required 700")
+        borrower: Borrower data for context
+
+    Returns:
+        Human-readable explanation
+    """
+    if filter_name == "cibil_score":
+        # Extract numbers from technical detail
+        parts = technical_detail.split()
+        current_score = parts[1] if len(parts) > 1 else "current"
+        required_score = parts[-1] if len(parts) > 0 else "higher"
+        return (
+            f"CIBIL score of {current_score} is below the minimum requirement of {required_score}. "
+            f"This lender requires a credit score of at least {required_score}."
+        )
+
+    elif filter_name == "vintage":
+        return (
+            f"Your business vintage ({technical_detail.split()[0]}) doesn't meet the minimum requirement. "
+            f"This lender needs more established businesses."
+        )
+
+    elif filter_name == "turnover":
+        parts = technical_detail.replace("₹", "").replace("L", "").split("<")
+        if len(parts) >= 2:
+            current = parts[0].strip()
+            required = parts[1].replace("required", "").strip()
+            return (
+                f"Annual turnover of ₹{current}L is below the minimum of ₹{required}L required by this lender."
+            )
+        return f"Annual turnover doesn't meet minimum requirement: {technical_detail}"
+
+    elif filter_name == "entity_type":
+        return (
+            f"Your business structure ({borrower.entity_type}) is not in the list of "
+            f"entity types this lender accepts."
+        )
+
+    elif filter_name == "pincode":
+        return (
+            f"Unfortunately, this lender doesn't currently operate in your area ({borrower.pincode}). "
+            f"Their services are not available in this pincode."
+        )
+
+    elif filter_name == "abb":
+        parts = technical_detail.replace("₹", "").replace(",", "").split("<")
+        if len(parts) >= 2:
+            current = parts[0].split()[-1]
+            required = parts[1].replace("required", "").strip()
+            return (
+                f"Average bank balance of ₹{current} is below the minimum of ₹{required} "
+                f"required by this lender."
+            )
+        return f"Average bank balance doesn't meet minimum requirement: {technical_detail}"
+
+    elif filter_name == "age":
+        return (
+            f"Age requirement not met: {technical_detail}. "
+            f"This lender has specific age criteria for applicants."
+        )
+
+    elif filter_name == "policy_available":
+        return "This lender's policy information is currently unavailable in our system."
+
+    else:
+        # Fallback for any other filter type
+        return f"{filter_name.replace('_', ' ').title()}: {technical_detail}"
+
+
+# ═══════════════════════════════════════════════════════════════
 # LAYER 1: HARD FILTERS
 # ═══════════════════════════════════════════════════════════════
 
@@ -569,7 +651,13 @@ async def score_case_eligibility(
                 rank=None  # Will be set in ranking
             )
         else:
-            # Failed hard filters
+            # Failed hard filters - Add friendly explanations (Fix 4)
+            friendly_explanations = {}
+            for filter_name, technical_detail in hard_details.items():
+                friendly_explanations[filter_name] = translate_filter_failure_to_friendly_text(
+                    filter_name, technical_detail, borrower
+                )
+
             result = EligibilityResult(
                 lender_name=lender.lender_name,
                 product_name=lender.product_name,
@@ -581,7 +669,8 @@ async def score_case_eligibility(
                 expected_ticket_max=None,
                 confidence=borrower.feature_completeness / 100.0,
                 missing_for_improvement=[],
-                rank=None
+                rank=None,
+                friendly_explanations=friendly_explanations  # Fix 4: Add friendly text
             )
 
         results.append(result)
@@ -609,6 +698,45 @@ async def score_case_eligibility(
     # Generate dynamic recommendations (for all cases, not just when passed_count = 0)
     dynamic_recommendations = generate_dynamic_recommendations(borrower, results)
 
+    # Fix 4: Generate LLM-powered eligibility clarity summary
+    llm_summary = None
+    try:
+        from app.services.llm_report_service import generate_eligibility_clarity_summary
+
+        # Prepare borrower data for LLM
+        borrower_data = {
+            "cibil_score": borrower.cibil_score,
+            "annual_turnover": borrower.annual_turnover,
+            "business_vintage_years": borrower.business_vintage_years,
+            "entity_type": str(borrower.entity_type),
+            "pincode": borrower.pincode
+        }
+
+        # Format passed lenders
+        passed_lenders_data = [
+            {
+                "lender_name": r.lender_name,
+                "expected_ticket_max": r.expected_ticket_max,
+                "approval_probability": str(r.approval_probability) if r.approval_probability else "N/A"
+            }
+            for r in ranked_passed
+        ]
+
+        # Format failed lenders with reasons
+        failed_lenders_data = [
+            {
+                "lender_name": r.lender_name,
+                "failure_reasons": list(r.friendly_explanations.values()) if r.friendly_explanations else list(r.hard_filter_details.values())
+            }
+            for r in failed_results[:10]  # Top 10 failures
+        ]
+
+        llm_summary = await generate_eligibility_clarity_summary(
+            borrower_data, passed_lenders_data, failed_lenders_data
+        )
+    except Exception as e:
+        logger.warning(f"Failed to generate LLM summary: {str(e)}")
+
     return EligibilityResponse(
         case_id="",  # Will be filled by caller
         total_lenders_evaluated=len(lenders),
@@ -616,7 +744,8 @@ async def score_case_eligibility(
         results=final_results,
         rejection_reasons=rejection_reasons,
         suggested_actions=suggested_actions,
-        dynamic_recommendations=dynamic_recommendations
+        dynamic_recommendations=dynamic_recommendations,
+        llm_summary=llm_summary  # Fix 4: Add LLM clarity
     )
 
 

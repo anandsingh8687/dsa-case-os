@@ -862,6 +862,103 @@ Keep it professional and actionable for DSAs."""
             logger.error(f"Failed to generate market summary: {str(e)}")
             return None
 
+    async def generate_eligibility_clarity_summary(
+        self,
+        borrower_data: Dict[str, Any],
+        passed_lenders: List[Dict[str, Any]],
+        failed_lenders: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Generate AI-powered eligibility explanation (Fix 4: BRE Clarity).
+
+        Args:
+            borrower_data: Dict with borrower info (CIBIL, turnover, vintage, etc.)
+            passed_lenders: List of lenders that passed
+            failed_lenders: List of lenders that failed with rejection reasons
+
+        Returns:
+            Dict with overall_summary, top_improvements, and lender_explanations
+        """
+        if not self.llm_client:
+            return None
+
+        # Build prompt with borrower profile
+        borrower_summary = (
+            f"CIBIL: {borrower_data.get('cibil_score', 'N/A')}, "
+            f"Turnover: ₹{borrower_data.get('annual_turnover', 'N/A')}L, "
+            f"Vintage: {borrower_data.get('business_vintage_years', 'N/A')}y, "
+            f"Entity: {borrower_data.get('entity_type', 'N/A')}, "
+            f"Pincode: {borrower_data.get('pincode', 'N/A')}"
+        )
+
+        # Format passed lenders
+        passed_str = "\n".join([
+            f"- {l['lender_name']} (₹{l.get('expected_ticket_max', 'N/A')}L, {l.get('approval_probability', 'N/A')})"
+            for l in passed_lenders[:5]  # Top 5
+        ]) if passed_lenders else "None"
+
+        # Format failed lenders with reasons
+        failed_str = "\n".join([
+            f"- {l['lender_name']}: {', '.join(l.get('failure_reasons', []))}"
+            for l in failed_lenders[:5]  # Top 5
+        ]) if failed_lenders else "None"
+
+        prompt = f"""You are a lending advisor. Given these eligibility results for a borrower, generate:
+1. A 2-line summary of their overall eligibility status
+2. Top 3 actionable improvement suggestions ranked by impact
+3. For each rejected lender, one sentence explaining why and what would change the outcome
+
+Borrower: {borrower_summary}
+
+Passed lenders ({len(passed_lenders)}):
+{passed_str}
+
+Failed lenders ({len(failed_lenders)}):
+{failed_str}
+
+Return as JSON:
+{{
+  "overall_summary": "2-line eligibility summary here",
+  "top_improvements": ["improvement 1", "improvement 2", "improvement 3"],
+  "lender_explanations": {{
+    "Lender Name": "explanation why rejected and what needs to change"
+  }}
+}}"""
+
+        try:
+            response = await self.llm_client.chat.completions.create(
+                model=settings.LLM_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a lending advisor helping DSAs understand eligibility results."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0.7,
+                max_tokens=500
+            )
+
+            # Parse JSON response
+            import json
+            content = response.choices[0].message.content.strip()
+            # Remove markdown code blocks if present
+            if content.startswith("```"):
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.strip()
+
+            result = json.loads(content)
+            logger.info("Generated eligibility clarity summary")
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to generate eligibility summary: {str(e)}")
+            return None
+
 
 # Singleton instance
 llm_report_service = LLMReportService()
@@ -871,3 +968,14 @@ llm_report_service = LLMReportService()
 async def generate_pincode_market_summary(pincode: str, lender_details: List[Dict[str, Any]]) -> Optional[str]:
     """Convenience wrapper for generating pincode market summaries."""
     return await llm_report_service.generate_pincode_market_summary(pincode, lender_details)
+
+
+async def generate_eligibility_clarity_summary(
+    borrower_data: Dict[str, Any],
+    passed_lenders: List[Dict[str, Any]],
+    failed_lenders: List[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """Convenience wrapper for generating eligibility clarity summaries."""
+    return await llm_report_service.generate_eligibility_clarity_summary(
+        borrower_data, passed_lenders, failed_lenders
+    )
