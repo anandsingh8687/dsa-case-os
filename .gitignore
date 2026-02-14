@@ -120,3 +120,4 @@ config/secrets.*
 # ===== Backup Files =====
 *.bak
 *.backup
+backend/app/config/.env*
