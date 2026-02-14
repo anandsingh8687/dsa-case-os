@@ -17,6 +17,7 @@ import CaseDetail from './pages/CaseDetail';
 import Copilot from './pages/Copilot';
 import Lenders from './pages/Lenders';
 import Settings from './pages/Settings';
+import PincodeChecker from './pages/PincodeChecker';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -70,6 +71,9 @@ function App() {
               </PublicRoute>
             }
           />
+
+          {/* Pincode Checker - Public Tool (Fix 5) */}
+          <Route path="/pincode-checker" element={<PincodeChecker />} />
 
           {/* Protected Routes */}
           <Route

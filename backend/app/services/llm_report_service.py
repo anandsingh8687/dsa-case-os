@@ -788,6 +788,86 @@ Comprehensive report generation requires LLM service. Please check LLM configura
             'sections': self._parse_sections(narrative)
         }
 
+    async def generate_pincode_market_summary(
+        self,
+        pincode: str,
+        lender_details: List[Dict[str, Any]]
+    ) -> Optional[str]:
+        """Generate AI-powered market intelligence summary for a pincode (Fix 5).
+
+        Args:
+            pincode: The 6-digit pincode
+            lender_details: List of lenders with their products and parameters
+
+        Returns:
+            A 2-3 line market summary for DSAs, or None if LLM unavailable
+        """
+        if not self.llm_client or not lender_details:
+            return None
+
+        # Extract key metrics for the prompt
+        lender_count = len(lender_details)
+        all_cibil_scores = []
+        all_max_tickets = []
+
+        for lender in lender_details:
+            if lender.get('cibil_range', {}).get('min'):
+                all_cibil_scores.append(lender['cibil_range']['min'])
+            if lender.get('ticket_range', {}).get('max'):
+                all_max_tickets.append(lender['ticket_range']['max'])
+
+        cibil_min = min(all_cibil_scores) if all_cibil_scores else "N/A"
+        cibil_max = max(all_cibil_scores) if all_cibil_scores else "N/A"
+        ticket_min = min(all_max_tickets) if all_max_tickets else "N/A"
+        ticket_max = max(all_max_tickets) if all_max_tickets else "N/A"
+
+        # Get lender names
+        lender_names = [l['lender_name'] for l in lender_details[:5]]  # Top 5
+
+        prompt = f"""Given that pincode {pincode} is served by {lender_count} lenders for Business Loans
+with CIBIL cutoffs ranging from {cibil_min}-{cibil_max} and max tickets from ₹{ticket_min:.0f}L-₹{ticket_max:.0f}L,
+generate a one-paragraph market summary for a DSA prospecting in this area.
+
+Top lenders: {', '.join(lender_names)}
+
+Generate a concise 2-3 line summary that highlights:
+1. Market coverage strength
+2. CIBIL range acceptance (sub-prime vs prime)
+3. Ticket size range
+
+Keep it professional and actionable for DSAs."""
+
+        try:
+            response = await self.llm_client.chat.completions.create(
+                model=settings.LLM_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a lending market analyst helping DSAs understand pincode-level lender coverage."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0.7,
+                max_tokens=200
+            )
+
+            summary = response.choices[0].message.content.strip()
+            logger.info(f"Generated market summary for pincode {pincode}")
+            return summary
+
+        except Exception as e:
+            logger.error(f"Failed to generate market summary: {str(e)}")
+            return None
+
 
 # Singleton instance
 llm_report_service = LLMReportService()
+
+
+# Convenience function for pincode market summaries
+async def generate_pincode_market_summary(pincode: str, lender_details: List[Dict[str, Any]]) -> Optional[str]:
+    """Convenience wrapper for generating pincode market summaries."""
+    return await llm_report_service.generate_pincode_market_summary(pincode, lender_details)

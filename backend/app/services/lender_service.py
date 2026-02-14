@@ -332,6 +332,101 @@ async def check_pincode_coverage(pincode: str) -> Dict[str, Any]:
     }
 
 
+async def get_pincode_lender_details(pincode: str) -> List[Dict[str, Any]]:
+    """Get detailed lender information for a pincode (Fix 5: Pincode Checker).
+
+    Returns lenders with their products and key eligibility parameters
+    for display in the standalone pincode checker page.
+
+    Args:
+        pincode: The 6-digit pincode
+
+    Returns:
+        List of dicts with:
+        - lender_id, lender_name
+        - products: list of products with key parameters
+        - cibil_range: min-max CIBIL scores
+        - ticket_range: min-max loan amounts
+        - product_count: number of products
+    """
+    async with get_db_session() as db:
+        # Get lenders and their products for this pincode
+        query = """
+            SELECT DISTINCT
+                l.id as lender_id,
+                l.lender_name,
+                l.lender_code,
+                lp.id as product_id,
+                lp.product_name,
+                lp.program_type,
+                lp.min_cibil_score,
+                lp.max_ticket_size,
+                lp.min_vintage_months,
+                lp.min_turnover_lakhs,
+                lp.eligible_entities
+            FROM lenders l
+            INNER JOIN lender_pincodes lpc ON l.id = lpc.lender_id
+            LEFT JOIN lender_products lp ON l.id = lp.lender_id AND lp.is_active = TRUE
+            WHERE lpc.pincode = $1 AND l.is_active = TRUE
+            ORDER BY l.lender_name, lp.product_name
+        """
+
+        rows = await db.fetch(query, pincode)
+
+        # Group by lender
+        lenders_map = {}
+        for row in rows:
+            lender_id = str(row['lender_id'])
+            if lender_id not in lenders_map:
+                lenders_map[lender_id] = {
+                    "lender_id": lender_id,
+                    "lender_name": row['lender_name'],
+                    "lender_code": row['lender_code'],
+                    "products": [],
+                    "cibil_scores": [],
+                    "max_tickets": []
+                }
+
+            # Add product details if product exists
+            if row['product_id']:
+                product = {
+                    "product_name": row['product_name'],
+                    "program_type": row['program_type'],
+                    "min_cibil": row['min_cibil_score'],
+                    "max_ticket": row['max_ticket_size'],
+                    "min_vintage_months": row['min_vintage_months'],
+                    "min_turnover_lakhs": row['min_turnover_lakhs'],
+                    "eligible_entities": row['eligible_entities']
+                }
+                lenders_map[lender_id]["products"].append(product)
+
+                # Track ranges for summary
+                if row['min_cibil_score']:
+                    lenders_map[lender_id]["cibil_scores"].append(row['min_cibil_score'])
+                if row['max_ticket_size']:
+                    lenders_map[lender_id]["max_tickets"].append(row['max_ticket_size'])
+
+        # Calculate summary stats for each lender
+        result = []
+        for lender_data in lenders_map.values():
+            cibil_scores = lender_data.pop("cibil_scores", [])
+            max_tickets = lender_data.pop("max_tickets", [])
+
+            lender_data["product_count"] = len(lender_data["products"])
+            lender_data["cibil_range"] = {
+                "min": min(cibil_scores) if cibil_scores else None,
+                "max": max(cibil_scores) if cibil_scores else None
+            }
+            lender_data["ticket_range"] = {
+                "min": min(max_tickets) if max_tickets else None,
+                "max": max(max_tickets) if max_tickets else None
+            }
+
+            result.append(lender_data)
+
+        return result
+
+
 # ═══════════════════════════════════════════════════════════════
 # STATISTICS
 # ═══════════════════════════════════════════════════════════════
