@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -13,23 +13,23 @@ import {
 } from 'lucide-react';
 import {
   getCase,
+  getCaseDocuments,
   getDocumentChecklist,
   getFeatureVector,
   getEligibilityResults,
+  runExtraction,
   runScoring,
   generateReport,
   getReportPdf,
-  reclassifyDocument,
 } from '../api/services';
-import { Card, Button, Badge, Loading, ProgressBar, Select } from '../components/ui';
-import { PROGRAM_TYPES, DOCUMENT_TYPES, CONFIDENCE_LEVELS } from '../utils/constants';
+import { Card, Button, Badge, Loading, ProgressBar } from '../components/ui';
 import { formatPercentage, formatCurrency, formatDate } from '../utils/format';
 
 const CaseDetail = () => {
   const { caseId } = useParams();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState('documents');
-  const [selectedProgram, setSelectedProgram] = useState('Banking');
+  const [selectedProgram, setSelectedProgram] = useState('banking');
 
   const { data: caseData, isLoading: caseLoading } = useQuery({
     queryKey: ['case', caseId],
@@ -40,6 +40,12 @@ const CaseDetail = () => {
     queryKey: ['checklist', caseId, selectedProgram],
     queryFn: () => getDocumentChecklist(caseId, selectedProgram),
     enabled: activeTab === 'checklist',
+  });
+
+  const { data: documentsData } = useQuery({
+    queryKey: ['case-documents', caseId],
+    queryFn: () => getCaseDocuments(caseId),
+    enabled: !!caseId,
   });
 
   const { data: featuresData } = useQuery({
@@ -58,7 +64,8 @@ const CaseDetail = () => {
     mutationFn: () => runScoring(caseId),
     onSuccess: () => {
       toast.success('Scoring completed!');
-      queryClient.invalidateQueries(['eligibility', caseId]);
+      queryClient.invalidateQueries({ queryKey: ['eligibility', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['case', caseId] });
     },
     onError: (error) => {
       toast.error(error.response?.data?.detail || 'Scoring failed');
@@ -69,7 +76,7 @@ const CaseDetail = () => {
     mutationFn: () => generateReport(caseId),
     onSuccess: () => {
       toast.success('Report generated!');
-      queryClient.invalidateQueries(['case', caseId]);
+      queryClient.invalidateQueries({ queryKey: ['case', caseId] });
     },
     onError: (error) => {
       toast.error(error.response?.data?.detail || 'Report generation failed');
@@ -94,10 +101,37 @@ const CaseDetail = () => {
   });
 
   const caseInfo = caseData?.data;
-  const documents = caseInfo?.documents || [];
-  const checklist = checklistData?.data?.checklist || {};
+  const documents = Array.isArray(documentsData?.data) ? documentsData.data : [];
+  const checklist = checklistData?.data || {};
   const features = featuresData?.data || {};
   const eligibility = eligibilityData?.data || {};
+  const matchingEligibilityResults = Array.isArray(eligibility?.results)
+    ? eligibility.results.filter((result) => result.hard_filter_status === 'pass')
+    : [];
+
+  const runFullPipelineMutation = useMutation({
+    mutationFn: async () => {
+      await runExtraction(caseId);
+      await runScoring(caseId);
+      await generateReport(caseId);
+    },
+    onSuccess: () => {
+      toast.success('All processing stages completed.');
+      queryClient.invalidateQueries({ queryKey: ['case', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['case-documents', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['features', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['eligibility', caseId] });
+    },
+    onError: (error) => {
+      toast.error(error.response?.data?.detail || 'Full processing failed');
+    },
+  });
+
+  useEffect(() => {
+    if (caseInfo?.program_type) {
+      setSelectedProgram(String(caseInfo.program_type).toLowerCase());
+    }
+  }, [caseInfo?.program_type]);
 
   const tabs = [
     { id: 'documents', label: 'Documents', icon: FileText },
@@ -126,7 +160,7 @@ const CaseDetail = () => {
             <div className="text-right">
               <div className="text-sm text-gray-600">Completeness</div>
               <div className="text-2xl font-bold text-primary">
-                {formatPercentage(caseInfo?.completeness_percentage)}
+                {formatPercentage(caseInfo?.completeness_score)}
               </div>
             </div>
             <Badge variant="primary">{caseInfo?.status}</Badge>
@@ -143,7 +177,7 @@ const CaseDetail = () => {
           </div>
           <div>
             <span className="text-gray-600">Industry:</span>
-            <span className="ml-2 font-medium">{caseInfo?.industry || 'N/A'}</span>
+            <span className="ml-2 font-medium">{caseInfo?.industry_type || 'N/A'}</span>
           </div>
           <div>
             <span className="text-gray-600">Created:</span>
@@ -204,18 +238,18 @@ const CaseDetail = () => {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {documents.map((doc) => (
-                    <tr key={doc.document_id}>
+                    <tr key={doc.id}>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {doc.filename}
+                        {doc.original_filename}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <Badge variant="info">{doc.doc_type || 'Unknown'}</Badge>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {formatPercentage(doc.confidence)}
+                        {formatPercentage(doc.classification_confidence)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <Badge variant={doc.status === 'processed' ? 'success' : 'warning'}>
+                        <Badge variant={doc.status === 'classified' ? 'success' : 'warning'}>
                           {doc.status}
                         </Badge>
                       </td>
@@ -238,32 +272,79 @@ const CaseDetail = () => {
                 onChange={(e) => setSelectedProgram(e.target.value)}
                 className="px-3 py-2 border border-gray-300 rounded-lg"
               >
-                {PROGRAM_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
+                {[
+                  { value: 'banking', label: 'Banking' },
+                  { value: 'income', label: 'Income' },
+                  { value: 'hybrid', label: 'Hybrid' },
+                ].map((type) => (
+                  <option key={type.value} value={type.value}>
+                    {type.label}
                   </option>
                 ))}
               </select>
             </div>
 
             <div className="mb-4">
-              <ProgressBar value={caseInfo?.completeness_percentage || 0} />
+              <ProgressBar value={checklist?.completeness_score || caseInfo?.completeness_score || 0} />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {Object.entries(checklist).map(([docType, status]) => (
-                <div
-                  key={docType}
-                  className={`flex items-center justify-between p-3 rounded-lg ${
-                    status ? 'bg-green-50' : 'bg-red-50'
-                  }`}
-                >
-                  <span className="font-medium">{docType}</span>
-                  <span className={status ? 'text-green-600' : 'text-red-600'}>
-                    {status ? '✓' : '✗'}
-                  </span>
-                </div>
-              ))}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+              <div className="rounded-lg border border-green-200 bg-green-50 p-4">
+                <h3 className="font-semibold text-green-700 mb-2">
+                  Available ({Array.isArray(checklist?.available) ? checklist.available.length : 0})
+                </h3>
+                {(checklist?.available || []).length === 0 ? (
+                  <p className="text-gray-500">No required documents detected yet.</p>
+                ) : (
+                  <ul className="space-y-1 text-green-800">
+                    {(checklist.available || []).map((docType) => (
+                      <li key={`available-${docType}`}>• {docType}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+                <h3 className="font-semibold text-red-700 mb-2">
+                  Missing ({Array.isArray(checklist?.missing) ? checklist.missing.length : 0})
+                </h3>
+                {(checklist?.missing || []).length === 0 ? (
+                  <p className="text-gray-500">No missing required documents.</p>
+                ) : (
+                  <ul className="space-y-1 text-red-800">
+                    {(checklist.missing || []).map((docType) => (
+                      <li key={`missing-${docType}`}>• {docType}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 md:col-span-2">
+                <h3 className="font-semibold text-blue-700 mb-2">
+                  Unreadable Files ({Array.isArray(checklist?.unreadable) ? checklist.unreadable.length : 0})
+                </h3>
+                {(checklist?.unreadable || []).length === 0 ? (
+                  <p className="text-gray-500">No unreadable files detected.</p>
+                ) : (
+                  <ul className="space-y-1 text-blue-800">
+                    {(checklist.unreadable || []).map((name) => (
+                      <li key={`unreadable-${name}`}>• {name}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <Button
+                onClick={() => runFullPipelineMutation.mutate()}
+                disabled={runFullPipelineMutation.isPending}
+                className="flex items-center gap-2"
+              >
+                <Play className="w-4 h-4" />
+                {runFullPipelineMutation.isPending ? 'Processing...' : 'Run Full Pipeline'}
+              </Button>
+              <p className="text-xs text-gray-500 mt-2">
+                Runs extraction, eligibility scoring, and report generation sequentially.
+              </p>
             </div>
           </Card>
         </div>
@@ -313,43 +394,22 @@ const CaseDetail = () => {
                   </div>
                   <div className="flex justify-between items-start">
                     <span className="text-sm text-gray-600">Business Vintage</span>
-                    <div className="text-right">
-                      <span className="font-medium">
-                        {features.business_vintage_years ? `${features.business_vintage_years} years` : 'N/A'}
-                      </span>
-                      {caseInfo?.gst_data && (
-                        <span className="ml-2 text-xs text-green-600">✓ from GST</span>
-                      )}
-                    </div>
+                    <span className="font-medium text-right">
+                      {features.business_vintage_years ? `${features.business_vintage_years} years` : 'N/A'}
+                    </span>
                   </div>
                   <div className="flex justify-between items-start">
                     <span className="text-sm text-gray-600">GSTIN</span>
-                    <span className="font-medium text-right">{features.gstin || caseInfo?.gstin || 'N/A'}</span>
+                    <span className="font-medium text-right">{features.gstin || 'N/A'}</span>
                   </div>
                   <div className="flex justify-between items-start">
                     <span className="text-sm text-gray-600">Industry</span>
-                    <span className="font-medium text-right">{features.industry_type || caseInfo?.industry || 'N/A'}</span>
+                    <span className="font-medium text-right">{features.industry_type || caseInfo?.industry_type || 'N/A'}</span>
                   </div>
                   <div className="flex justify-between items-start">
                     <span className="text-sm text-gray-600">Pincode</span>
                     <span className="font-medium text-right">{features.pincode || caseInfo?.pincode || 'N/A'}</span>
                   </div>
-                  {caseInfo?.gst_data?.state && (
-                    <div className="flex justify-between items-start">
-                      <span className="text-sm text-gray-600">State</span>
-                      <span className="font-medium text-right">{caseInfo.gst_data.state}</span>
-                    </div>
-                  )}
-                  {caseInfo?.gst_data?.status && (
-                    <div className="flex justify-between items-start">
-                      <span className="text-sm text-gray-600">GST Status</span>
-                      <span className={`font-medium text-right ${
-                        caseInfo.gst_data.status === 'Active' ? 'text-green-600' : 'text-red-600'
-                      }`}>
-                        {caseInfo.gst_data.status}
-                      </span>
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -487,7 +547,7 @@ const CaseDetail = () => {
               </Button>
             </div>
 
-            {eligibility.results && eligibility.results.length > 0 ? (
+            {Array.isArray(eligibility?.results) && eligibility.results.length > 0 ? (
               <>
                 {/* Rejection Analysis - Only show when no lenders passed */}
                 {eligibility.lenders_passed === 0 && eligibility.rejection_reasons && eligibility.rejection_reasons.length > 0 && (
@@ -505,7 +565,7 @@ const CaseDetail = () => {
 
                     <h5 className="font-semibold text-gray-800 mb-3">Suggested Actions to Improve Eligibility:</h5>
                     <div className="space-y-2 bg-white rounded-lg p-4">
-                      {eligibility.suggested_actions.map((action, idx) => (
+                      {(eligibility.suggested_actions || []).map((action, idx) => (
                         <div key={idx} className="flex items-start gap-2">
                           <span className="text-blue-600 mt-0.5">→</span>
                           <span className="text-sm text-gray-700">{action}</span>
@@ -543,39 +603,40 @@ const CaseDetail = () => {
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {eligibility.results
-                        .filter((r) => r.eligible)
-                        .map((result, index) => (
+                      {matchingEligibilityResults.map((result, index) => {
+                        const probability = String(result.approval_probability || '').toUpperCase();
+                        return (
                           <tr key={result.lender_name}>
                             <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                              #{index + 1}
+                              #{result.rank || index + 1}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap font-medium">
                               {result.lender_name}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
                               <span className="text-lg font-bold text-primary">
-                                {result.score}/100
+                                {Math.round(result.eligibility_score || 0)}/100
                               </span>
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
                               <Badge
                                 variant={
-                                  result.probability === 'HIGH'
+                                  probability === 'HIGH'
                                     ? 'success'
-                                    : result.probability === 'MEDIUM'
+                                    : probability === 'MEDIUM'
                                     ? 'warning'
                                     : 'danger'
                                 }
                               >
-                                {result.probability}
+                                {probability || 'N/A'}
                               </Badge>
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap font-medium">
-                              {formatCurrency(result.max_ticket_size)}
+                              {formatCurrency(result.expected_ticket_max)}
                             </td>
                           </tr>
-                        ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

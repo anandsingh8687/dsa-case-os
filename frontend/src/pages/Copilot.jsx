@@ -11,9 +11,14 @@ const Copilot = () => {
   const queryMutation = useMutation({
     mutationFn: queryCopilot,
     onSuccess: (response) => {
+      const assistantReply =
+        response?.data?.answer ||
+        response?.data?.response ||
+        'I could not generate a response. Please try rephrasing your query.';
+
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: response.data.response },
+        { role: 'assistant', content: assistantReply },
       ]);
     },
     onError: () => {

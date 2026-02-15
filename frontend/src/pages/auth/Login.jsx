@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import toast from 'react-hot-toast';
-import { login } from '../../api/services';
+import { login, getCurrentUser } from '../../api/services';
 import { setToken, setUser } from '../../utils/auth';
 import { Button, Input, Card } from '../../components/ui';
 
 const Login = () => {
-  const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
   const {
     register,
@@ -19,10 +18,20 @@ const Login = () => {
     setIsLoading(true);
     try {
       const response = await login(data);
-      const { access_token, user } = response.data;
+      const accessToken = response.data?.access_token;
 
-      setToken(access_token);
-      setUser(user);
+      if (!accessToken) {
+        throw new Error('Login token missing');
+      }
+
+      setToken(accessToken);
+
+      try {
+        const meResponse = await getCurrentUser();
+        setUser(meResponse.data);
+      } catch (profileError) {
+        setUser(null);
+      }
 
       toast.success('Login successful!');
       // Force a full page reload to ensure auth state is picked up by route guards
@@ -38,7 +47,7 @@ const Login = () => {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-blue-100 flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">DSA Case OS</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">Credilo</h1>
           <p className="text-gray-600">Sign in to your account</p>
         </div>
 

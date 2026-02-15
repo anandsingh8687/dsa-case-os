@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { motion } from 'framer-motion';
 import {
   ArrowRight,
@@ -13,11 +13,15 @@ import {
   Target
 } from 'lucide-react';
 
-// Use environment variable or production URL
-const APP_URL = import.meta.env.VITE_APP_URL || 'https://dsa-case-os-production.up.railway.app';
+const LOGIN_URL = '/login';
 
 const LandingPage = () => {
-  const [activeDemo, setActiveDemo] = useState(0);
+  const scrollToHowItWorks = () => {
+    const section = document.getElementById('how-it-works');
+    if (section) {
+      section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
 
   const features = [
     {
@@ -105,7 +109,7 @@ const LandingPage = () => {
             <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
               <FileText className="w-6 h-6 text-white" />
             </div>
-            <span className="text-2xl font-bold text-white">DSA Case OS</span>
+            <span className="text-2xl font-bold text-white">Credilo</span>
           </div>
           <div className="flex space-x-4">
             <button
@@ -115,13 +119,13 @@ const LandingPage = () => {
               Pincode Checker
             </button>
             <button
-              onClick={() => window.location.href = APP_URL}
+              onClick={() => window.location.href = LOGIN_URL}
               className="px-6 py-2 text-white hover:text-blue-300 transition"
             >
               Sign In
             </button>
             <button
-              onClick={() => window.location.href = APP_URL}
+              onClick={() => window.location.href = LOGIN_URL}
               className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
             >
               Get Started
@@ -147,14 +151,14 @@ const LandingPage = () => {
               </p>
               <div className="flex flex-col sm:flex-row gap-4 mb-8">
                 <button
-                  onClick={() => window.location.href = APP_URL}
+                  onClick={() => window.location.href = LOGIN_URL}
                   className="px-8 py-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition flex items-center justify-center space-x-2"
                 >
                   <span>Start Free Trial</span>
                   <ArrowRight className="w-5 h-5" />
                 </button>
                 <button
-                  onClick={() => setActiveDemo(1)}
+                  onClick={scrollToHowItWorks}
                   className="px-8 py-4 bg-white/10 text-white rounded-lg font-semibold hover:bg-white/20 transition backdrop-blur"
                 >
                   See How It Works
@@ -259,7 +263,7 @@ const LandingPage = () => {
       </div>
 
       {/* How It Works */}
-      <div className="relative z-10 container mx-auto px-6 py-20">
+      <div id="how-it-works" className="relative z-10 container mx-auto px-6 py-20">
         <div className="text-center mb-16">
           <h2 className="text-4xl font-bold text-white mb-4">How It Works</h2>
           <p className="text-xl text-gray-300">From documents to decision in 4 simple steps</p>
@@ -349,7 +353,7 @@ const LandingPage = () => {
                 <div className="text-xl text-gray-300">Time Saved</div>
               </div>
               <p className="text-gray-300 text-center mb-6">
-                "DSA Case OS transformed our workflow. What used to take 2 hours now takes 10 minutes.
+                "Credilo transformed our workflow. What used to take 2 hours now takes 10 minutes.
                 The AI is incredibly accurate!"
               </p>
               <div className="flex items-center justify-center space-x-3">
@@ -370,16 +374,16 @@ const LandingPage = () => {
       <div className="relative z-10 container mx-auto px-6 py-20">
         <div className="bg-gradient-to-r from-blue-600 to-purple-600 rounded-3xl p-12 text-center">
           <h2 className="text-4xl font-bold text-white mb-4">Ready to Transform Your Workflow?</h2>
-          <p className="text-xl text-white/90 mb-8">Join hundreds of DSAs already using DSA Case OS</p>
+          <p className="text-xl text-white/90 mb-8">Join hundreds of DSAs already using Credilo</p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
-              onClick={() => window.location.href = APP_URL}
+              onClick={() => window.location.href = LOGIN_URL}
               className="px-10 py-4 bg-white text-blue-600 rounded-lg font-bold text-lg hover:bg-gray-100 transition"
             >
               Start Free Trial
             </button>
             <button
-              onClick={() => window.location.href = APP_URL}
+              onClick={() => window.location.href = LOGIN_URL}
               className="px-10 py-4 bg-white/20 text-white rounded-lg font-bold text-lg hover:bg-white/30 transition backdrop-blur"
             >
               Sign In
@@ -391,7 +395,7 @@ const LandingPage = () => {
       {/* Footer */}
       <footer className="relative z-10 container mx-auto px-6 py-8 border-t border-white/10">
         <div className="text-center text-gray-400">
-          <p>© 2026 DSA Case OS. Powered by AI. Built for DSAs.</p>
+          <p>© 2026 Credilo. Powered by AI. Built for DSAs.</p>
         </div>
       </footer>
     </div>

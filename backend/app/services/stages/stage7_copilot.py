@@ -16,6 +16,7 @@ Uses Kimi 2.5 (Moonshot AI) via OpenAI-compatible API.
 import logging
 import json
 import time
+import re
 from typing import Dict, Any, List, Optional, Set
 from datetime import datetime
 
@@ -31,6 +32,14 @@ from app.services.stages.stage7_retriever import (
 from app.db.database import get_db_session
 
 logger = logging.getLogger(__name__)
+CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
+
+
+def _sanitize_text(value: Optional[str]) -> str:
+    """Remove control characters that can break JSON parsing in clients."""
+    if not value:
+        return ""
+    return CONTROL_CHARS_RE.sub("", value)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -64,6 +73,7 @@ async def query_copilot(query: str, user_id: Optional[str] = None) -> CopilotRes
 
         # Step 3: Build LLM prompt and get response (with conversation memory)
         answer = await _generate_answer(query, query_type, params, lender_data, user_id)
+        answer = _sanitize_text(answer)
 
         # Step 4: Build sources list
         sources = _build_sources(lender_data, query_type)
@@ -93,7 +103,9 @@ async def query_copilot(query: str, user_id: Optional[str] = None) -> CopilotRes
         response_time_ms = int((time.time() - start_time) * 1000)
 
         return CopilotResponse(
-            answer=f"I encountered an error processing your query: {str(e)}. Please try rephrasing your question.",
+            answer=_sanitize_text(
+                f"I encountered an error processing your query: {str(e)}. Please try rephrasing your question."
+            ),
             sources=[],
             response_time_ms=response_time_ms
         )

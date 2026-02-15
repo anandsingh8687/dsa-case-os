@@ -15,7 +15,6 @@ import Dashboard from './pages/Dashboard';
 import NewCase from './pages/NewCase';
 import CaseDetail from './pages/CaseDetail';
 import Copilot from './pages/Copilot';
-import Lenders from './pages/Lenders';
 import Settings from './pages/Settings';
 import PincodeChecker from './pages/PincodeChecker';
 
@@ -71,7 +70,20 @@ function App() {
               </PublicRoute>
             }
           />
-          <Route path="/pincode-checker" element={<PincodeChecker />} />
+          <Route
+            path="/pincode-checker"
+            element={
+              isAuthenticated() ? (
+                <ProtectedRoute>
+                  <Layout>
+                    <PincodeChecker />
+                  </Layout>
+                </ProtectedRoute>
+              ) : (
+                <PincodeChecker />
+              )
+            }
+          />
 
           {/* Protected Routes */}
           <Route
@@ -110,16 +122,6 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <Copilot />
-                </Layout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/lenders"
-            element={
-              <ProtectedRoute>
-                <Layout>
-                  <Lenders />
                 </Layout>
               </ProtectedRoute>
             }

@@ -4,7 +4,6 @@ import {
   LayoutDashboard,
   FilePlus,
   MessageSquare,
-  Building2,
   MapPin,
   Settings,
 } from 'lucide-react';
@@ -14,7 +13,6 @@ const Sidebar = () => {
     { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/cases/new', icon: FilePlus, label: 'New Case' },
     { to: '/copilot', icon: MessageSquare, label: 'Copilot' },
-    { to: '/lenders', icon: Building2, label: 'Lenders' },
     { to: '/pincode-checker', icon: MapPin, label: 'Pincode Checker' },
     { to: '/settings', icon: Settings, label: 'Settings' },
   ];
@@ -22,7 +20,7 @@ const Sidebar = () => {
   return (
     <div className="w-64 bg-gray-900 text-white h-screen fixed left-0 top-0 overflow-y-auto">
       <div className="p-6">
-        <h1 className="text-2xl font-bold text-primary">DSA Case OS</h1>
+        <h1 className="text-2xl font-bold text-primary">Credilo</h1>
       </div>
 
       <nav className="mt-6">

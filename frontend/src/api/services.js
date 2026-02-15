@@ -7,6 +7,9 @@ export const login = (credentials) =>
 export const register = (userData) =>
   apiClient.post('/auth/register', userData);
 
+export const getCurrentUser = () =>
+  apiClient.get('/auth/me');
+
 // Cases
 export const createCase = (caseData) =>
   apiClient.post('/cases/', caseData);
@@ -16,6 +19,9 @@ export const getCases = (params) =>
 
 export const getCase = (caseId) =>
   apiClient.get(`/cases/${caseId}`);
+
+export const getCaseDocuments = (caseId) =>
+  apiClient.get(`/cases/${caseId}/documents`);
 
 export const updateCase = (caseId, data) =>
   apiClient.patch(`/cases/${caseId}`, data);

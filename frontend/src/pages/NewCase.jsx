@@ -5,7 +5,15 @@ import { useDropzone } from 'react-dropzone';
 import { useMutation } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { Upload, FileText, CheckCircle, Sparkles } from 'lucide-react';
-import { createCase, updateCase, uploadDocuments, getCaseStatus } from '../api/services';
+import {
+  createCase,
+  updateCase,
+  uploadDocuments,
+  getCaseStatus,
+  runExtraction,
+  runScoring,
+  generateReport,
+} from '../api/services';
 import { Button, Input, Select, Card, ProgressBar } from '../components/ui';
 import apiClient from '../api/client';
 
@@ -64,6 +72,21 @@ const NewCase = () => {
     },
   });
 
+  const runPostUploadPipeline = async (targetCaseId) => {
+    try {
+      await runExtraction(targetCaseId);
+      await runScoring(targetCaseId);
+      await generateReport(targetCaseId);
+      toast.success('All processing stages completed automatically.');
+    } catch (error) {
+      const details = error?.response?.data?.detail;
+      if (details) {
+        console.warn('[NewCase] Auto pipeline warning:', details);
+      }
+      toast('Upload done. You can continue processing from View Case.', { icon: 'ℹ️' });
+    }
+  };
+
   const createCaseMutation = useMutation({
     mutationFn: createCase,
     onSuccess: (response) => {
@@ -94,20 +117,19 @@ const NewCase = () => {
   };
 
   const waitForProcessing = async (targetCaseId) => {
-    const pendingStatuses = new Set(['created', 'processing', 'documents_classified']);
-    const maxAttempts = 30; // ~60 seconds
+    const maxAttempts = 5; // quick readiness check (~5 seconds)
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         const response = await getCaseStatus(targetCaseId);
         const statusValue = response?.data?.status;
-        if (!pendingStatuses.has(statusValue)) {
+        if (statusValue && statusValue !== 'created') {
           return statusValue;
         }
       } catch (error) {
         // Keep polling even if one attempt fails.
       }
-      await wait(2000);
+      await wait(1000);
     }
     return null;
   };
@@ -134,7 +156,7 @@ const NewCase = () => {
       await checkForGSTData(variables.caseId);
 
       if (!finalStatus) {
-        toast('Processing is taking longer than expected. You can continue now.', {
+        toast('Upload is complete. Processing continues in the background.', {
           icon: '⏳',
         });
       }
@@ -144,6 +166,9 @@ const NewCase = () => {
       } else {
         setStep(3);
       }
+
+      // Trigger downstream stages in background so users don't need manual runs.
+      void runPostUploadPipeline(variables.caseId);
     },
     onError: (error) => {
       toast.error(error.response?.data?.detail || 'Failed to upload documents');

@@ -38,8 +38,10 @@ export const CASE_STATUSES = {
   created: { label: 'Created', color: 'bg-gray-500' },
   documents_uploaded: { label: 'Documents Uploaded', color: 'bg-blue-500' },
   processing: { label: 'Processing', color: 'bg-yellow-500' },
+  documents_classified: { label: 'Documents Classified', color: 'bg-cyan-500' },
   features_extracted: { label: 'Features Extracted', color: 'bg-purple-500' },
   scored: { label: 'Scored', color: 'bg-indigo-500' },
+  eligibility_scored: { label: 'Eligibility Scored', color: 'bg-indigo-500' },
   report_generated: { label: 'Report Generated', color: 'bg-green-500' },
   failed: { label: 'Failed', color: 'bg-red-500' },
 };

@@ -18,7 +18,7 @@ const Dashboard = () => {
     retryDelay: 1000,
   });
 
-  const cases = casesData?.data?.cases || [];
+  const cases = Array.isArray(casesData?.data) ? casesData.data : [];
 
   const filteredCases = cases.filter((caseItem) =>
     caseItem.borrower_name?.toLowerCase().includes(searchTerm.toLowerCase())
@@ -28,7 +28,7 @@ const Dashboard = () => {
     total: cases.length,
     avgCompleteness:
       cases.length > 0
-        ? cases.reduce((sum, c) => sum + (c.completeness_percentage || 0), 0) /
+        ? cases.reduce((sum, c) => sum + (c.completeness_score || 0), 0) /
           cases.length
         : 0,
     completed: cases.filter((c) => c.status === 'report_generated').length,
@@ -179,11 +179,11 @@ const Dashboard = () => {
                   <div className="flex justify-between text-sm mb-1">
                     <span className="text-gray-600">Completeness</span>
                     <span className="font-medium">
-                      {formatPercentage(caseItem.completeness_percentage)}
+                      {formatPercentage(caseItem.completeness_score)}
                     </span>
                   </div>
                   <ProgressBar
-                    value={caseItem.completeness_percentage || 0}
+                    value={caseItem.completeness_score || 0}
                     max={100}
                   />
                 </div>

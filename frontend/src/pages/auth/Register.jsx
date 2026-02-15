@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import toast from 'react-hot-toast';
-import { register as registerUser } from '../../api/services';
+import { register as registerUser, login, getCurrentUser } from '../../api/services';
 import { setToken, setUser } from '../../utils/auth';
 import { Button, Input, Card } from '../../components/ui';
 
 const Register = () => {
-  const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
   const {
     register,
@@ -21,16 +20,31 @@ const Register = () => {
   const onSubmit = async (data) => {
     setIsLoading(true);
     try {
-      const response = await registerUser({
+      await registerUser({
         email: data.email,
         password: data.password,
-        name: data.name,
+        full_name: data.name,
       });
 
-      const { access_token, user } = response.data;
+      // Register endpoint returns profile only, so login explicitly after register.
+      const loginResponse = await login({
+        email: data.email,
+        password: data.password,
+      });
+      const accessToken = loginResponse.data?.access_token;
 
-      setToken(access_token);
-      setUser(user);
+      if (!accessToken) {
+        throw new Error('Registration succeeded but login token missing');
+      }
+
+      setToken(accessToken);
+
+      try {
+        const meResponse = await getCurrentUser();
+        setUser(meResponse.data);
+      } catch (profileError) {
+        setUser(null);
+      }
 
       toast.success('Registration successful!');
       // Force a full page reload to ensure auth state is picked up by route guards
@@ -48,7 +62,7 @@ const Register = () => {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-blue-100 flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">DSA Case OS</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">Credilo</h1>
           <p className="text-gray-600">Create your account</p>
         </div>
 
