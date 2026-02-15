@@ -20,6 +20,7 @@ import PincodeChecker from './pages/PincodeChecker';
 import QuickScan from './pages/QuickScan';
 import AdminPanel from './pages/AdminPanel';
 import BankStatement from './pages/BankStatement';
+import Commission from './pages/Commission';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -171,6 +172,16 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <Settings />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/commission"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <Commission />
                 </Layout>
               </ProtectedRoute>
             }

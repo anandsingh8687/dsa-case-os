@@ -17,6 +17,7 @@ from . import (
     bank_statement,
     admin,
     quick_scan,
+    commission,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "bank_statement",
     "admin",
     "quick_scan",
+    "commission",
 ]

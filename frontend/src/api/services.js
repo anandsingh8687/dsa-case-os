@@ -129,6 +129,28 @@ export const getAdminLogs = (params) =>
 export const getAdminHealth = () =>
   apiClient.get('/admin/health');
 
+// Commission
+export const getCommissionOverview = () =>
+  apiClient.get('/commission/overview');
+
+export const getCommissionRates = () =>
+  apiClient.get('/commission/rates');
+
+export const upsertCommissionRate = (payload) =>
+  apiClient.post('/commission/rates', payload);
+
+export const deleteCommissionRate = (rateId) =>
+  apiClient.delete(`/commission/rates/${rateId}`);
+
+export const calculateCommission = (payload) =>
+  apiClient.post('/commission/calculate', payload);
+
+export const upsertCommissionPayout = (payload) =>
+  apiClient.post('/commission/payouts', payload);
+
+export const getCommissionPayouts = (params) =>
+  apiClient.get('/commission/payouts', { params });
+
 // Bank Statement Analyzer
 export const processBankStatements = (formData) =>
   apiClient.post('/bank-statement/process', formData, {
