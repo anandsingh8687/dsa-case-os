@@ -31,6 +31,7 @@ import {
 } from '../api/services';
 import { Card, Button, Badge, Loading, ProgressBar, Modal } from '../components/ui';
 import { formatPercentage, formatCurrency, formatDate } from '../utils/format';
+import { getUser } from '../utils/auth';
 
 const lakhToRupees = (valueInLakhs) => {
   if (valueInLakhs === null || valueInLakhs === undefined || Number.isNaN(Number(valueInLakhs))) {
@@ -98,6 +99,8 @@ const CaseDetail = () => {
   const [emiLoanAmountLakhs, setEmiLoanAmountLakhs] = useState(10);
   const [emiTenureMonths, setEmiTenureMonths] = useState(36);
   const [rpsPreview, setRpsPreview] = useState(null);
+  const [emailLenderKey, setEmailLenderKey] = useState('');
+  const [rmEmail, setRmEmail] = useState('');
 
   const { data: caseData, isLoading: caseLoading } = useQuery({
     queryKey: ['case', caseId],
@@ -217,6 +220,9 @@ const CaseDetail = () => {
   const firstMatchTicket = matchingEligibilityResults[0]?.expected_ticket_max;
 
   const emiLoanAmountRupees = lakhToRupees(emiLoanAmountLakhs);
+  const selectedEmailLender = matchingEligibilityResults.find(
+    (item) => `${item.lender_name}::${item.product_name}` === emailLenderKey
+  ) || null;
 
   const runFullPipelineMutation = useMutation({
     mutationFn: async () => {
@@ -280,6 +286,14 @@ const CaseDetail = () => {
     }
   }, [caseInfo?.loan_amount_requested, firstMatchTicket]);
 
+  useEffect(() => {
+    if (!matchingEligibilityResults.length) return;
+    if (!emailLenderKey) {
+      const first = matchingEligibilityResults[0];
+      setEmailLenderKey(`${first.lender_name}::${first.product_name}`);
+    }
+  }, [matchingEligibilityResults.length, emailLenderKey]);
+
   const tabs = [
     { id: 'documents', label: 'Documents', icon: FileText },
     { id: 'checklist', label: 'Checklist', icon: CheckSquare },
@@ -287,6 +301,47 @@ const CaseDetail = () => {
     { id: 'eligibility', label: 'Eligibility', icon: TrendingUp },
     { id: 'report', label: 'Report', icon: FileDown },
   ];
+
+  const openMailtoDraft = () => {
+    if (!selectedEmailLender) {
+      toast.error('Select a lender first');
+      return;
+    }
+    if (!rmEmail) {
+      toast.error('Enter lender RM email');
+      return;
+    }
+
+    const loggedInUser = getUser();
+    const ticketText = formatLakhAmount(selectedEmailLender.expected_ticket_max);
+    const strengths = (caseReport?.strengths || []).slice(0, 3).join('; ') || 'Clean basic profile';
+    const docNames = documents.map((doc) => doc.original_filename).filter(Boolean).slice(0, 8).join(', ') || 'Available in case folder';
+    const subject = `[Credilo] ${selectedEmailLender.product_name} Case Submission - ${caseInfo?.borrower_name || caseId} (${caseId})`;
+    const body = [
+      `Dear Team ${selectedEmailLender.lender_name},`,
+      '',
+      `Please find below a new ${selectedEmailLender.product_name} opportunity for your review:`,
+      `- Borrower: ${caseInfo?.borrower_name || 'N/A'}`,
+      `- Entity: ${caseInfo?.entity_type || 'N/A'}`,
+      `- CIBIL: ${features?.cibil_score || caseInfo?.cibil_score_manual || 'N/A'}`,
+      `- Business Vintage: ${features?.business_vintage_years || caseInfo?.business_vintage_years || 'N/A'} years`,
+      `- Requested Loan: ${formatLakhAmount(caseInfo?.loan_amount_requested)}`,
+      `- Indicative Eligible Ticket: ${ticketText}`,
+      `- Pincode: ${features?.pincode || caseInfo?.pincode || 'N/A'}`,
+      '',
+      `Key strengths: ${strengths}`,
+      `Documents available: ${docNames}`,
+      '',
+      `Please share eligibility feedback and next steps.`,
+      '',
+      'Regards,',
+      `${loggedInUser?.full_name || 'DSA Team'}`,
+      'Credilo',
+    ].join('\\n');
+
+    const mailto = `mailto:${encodeURIComponent(rmEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailto;
+  };
 
   if (caseLoading) {
     return <Loading size="lg" text="Loading case..." />;
@@ -1128,6 +1183,49 @@ const CaseDetail = () => {
                       rows={8}
                       className="w-full border border-gray-300 rounded-lg p-3 text-sm text-gray-700 bg-gray-50"
                     />
+                  </div>
+                )}
+
+                {matchingEligibilityResults.length > 0 && (
+                  <div className="p-4 rounded-lg border border-gray-200 bg-white">
+                    <h4 className="font-semibold mb-3">Email Collaboration (Lender RM)</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="md:col-span-1">
+                        <label className="block text-xs text-gray-600 mb-1">Lender</label>
+                        <select
+                          value={emailLenderKey}
+                          onChange={(e) => setEmailLenderKey(e.target.value)}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                        >
+                          {matchingEligibilityResults.map((lender) => (
+                            <option
+                              key={`mail-lender-${lender.lender_name}-${lender.product_name}`}
+                              value={`${lender.lender_name}::${lender.product_name}`}
+                            >
+                              {lender.lender_name} • {lender.product_name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="md:col-span-1">
+                        <label className="block text-xs text-gray-600 mb-1">RM Email</label>
+                        <input
+                          type="email"
+                          value={rmEmail}
+                          onChange={(e) => setRmEmail(e.target.value)}
+                          placeholder="rm@lender.com"
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div className="md:col-span-1 flex items-end">
+                        <Button className="w-full" onClick={openMailtoDraft}>
+                          Open Email Draft
+                        </Button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-2">
+                      Opens your email client with prefilled case summary, strengths, and document list.
+                    </p>
                   </div>
                 )}
               </div>
