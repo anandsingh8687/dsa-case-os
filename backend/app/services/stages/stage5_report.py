@@ -419,7 +419,7 @@ async def generate_submission_strategy(
 - Credit standing: {credit_profile} (CIBIL: {borrower.cibil_score or 'pending'})
 - Monthly cash flow: ₹{(borrower.monthly_turnover or borrower.monthly_credit_avg or 0) / 100000:.2f} Lakhs
 - Banking relationship strength: Average balance of ₹{(borrower.avg_monthly_balance or 0) / 100000:.2f} Lakhs
-- Growth ambition: Seeking ₹{borrower.loan_amount_requested or 'N/A'} Lakhs to fuel expansion
+- Growth ambition: Seeking ₹{getattr(borrower, 'loan_amount_requested', 'N/A')} Lakhs to fuel expansion
 
 **THE OPPORTUNITY LANDSCAPE:**
 Our eligibility analysis has identified {len(passed)} compatible lenders, ranked by match strength:
