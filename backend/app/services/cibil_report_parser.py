@@ -137,9 +137,18 @@ class CibilReportParser:
         return 0
 
     def _extract_enquiry_count_6m(self, text: str, report_date: Optional[date]) -> Optional[int]:
-        summary = re.search(r"Recent\s+Enquiries\s+(\d+)", text, flags=re.IGNORECASE)
-        if summary:
-            return int(summary.group(1))
+        summary_patterns = [
+            r"Recent\s+Enquiries(?:\s+last\s+\d+\s+months?)?\s*[:\-]?\s*(\d{1,3})\b",
+            r"Recent\s+Enquiries(?:\s*\n|\s)+(?:last\s+\d+\s+months?\s*)?(\d{1,3})\b",
+            r"Enquiries\s+in\s+last\s+(?:3|6)\s+months?\s*[:\-]?\s*(\d{1,3})\b",
+        ]
+        for pattern in summary_patterns:
+            summary = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+            if summary:
+                count = int(summary.group(1))
+                if 0 <= count <= 500:
+                    return count
+
         section_counts: List[int] = []
 
         for start_match in re.finditer(r"Credit\s+Enquiries", text, flags=re.IGNORECASE):
