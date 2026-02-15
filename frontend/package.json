@@ -11,7 +11,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "serve -s dist --listen tcp://0.0.0.0:$PORT"
+    "start": "serve -s dist --listen tcp://0.0.0.0:$PORT",
+    "start:railway": "sh -c 'if [ \"${PORT:-8000}\" = \"8000\" ]; then serve -s dist --listen tcp://0.0.0.0:8000; else serve -s dist --listen tcp://0.0.0.0:8000 & serve -s dist --listen tcp://0.0.0.0:${PORT}; fi'"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.20.0",
