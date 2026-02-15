@@ -1,7 +1,9 @@
 import axios from 'axios';
 
-// Use environment variable for API URL, fallback to production URL
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://dsa-case-os-production.up.railway.app/api/v1';
+// Use environment variable for API URL, fallback to backend Railway service URL.
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  'https://beautiful-insight-production-16a6.up.railway.app/api/v1';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,

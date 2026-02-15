@@ -8,7 +8,7 @@ import { Upload, FileText, CheckCircle, Sparkles } from 'lucide-react';
 import { createCase, uploadDocuments } from '../api/services';
 import { Button, Input, Select, Card, ProgressBar } from '../components/ui';
 import { ENTITY_TYPES, PROGRAM_TYPES } from '../utils/constants';
-import axios from 'axios';
+import apiClient from '../api/client';
 
 const NewCase = () => {
   const navigate = useNavigate();
@@ -71,13 +71,7 @@ const NewCase = () => {
 
     setIsCheckingGST(true);
     try {
-      const token = localStorage.getItem('token');
-      const response = await axios.get(
-        `${import.meta.env.VITE_API_URL || 'http://localhost:8000/api'}/cases/${caseId}/gst-data`,
-        {
-          headers: { Authorization: `Bearer ${token}` }
-        }
-      );
+      const response = await apiClient.get(`/cases/${caseId}/gst-data`);
 
       if (response.data && response.data.gst_data) {
         setGstData(response.data.gst_data);
