@@ -454,7 +454,8 @@ If there are any profile weaknesses, address them proactively. Turn them into op
         response = await client.chat.completions.create(
             model=settings.LLM_MODEL,
             max_tokens=800,
-            temperature=0.4,
+            # Kimi 2.5 on this deployment currently accepts only temperature=1.
+            temperature=1.0,
             messages=[
                 {
                     "role": "system",
