@@ -14,7 +14,9 @@ from . import (
     share,
     flexible_case,
     batch_upload,
-    bank_statement
+    bank_statement,
+    admin,
+    quick_scan,
 )
 
 __all__ = [
@@ -31,5 +33,7 @@ __all__ = [
     "share",
     "flexible_case",
     "batch_upload",
-    "bank_statement"
+    "bank_statement",
+    "admin",
+    "quick_scan",
 ]

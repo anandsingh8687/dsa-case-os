@@ -71,6 +71,9 @@ export const runScoring = (caseId) =>
 export const getEligibilityResults = (caseId) =>
   apiClient.get(`/eligibility/case/${caseId}/results`);
 
+export const getEligibilityExplanation = (caseId) =>
+  apiClient.get(`/eligibility/case/${caseId}/explain`);
+
 // Reports
 export const generateReport = (caseId) =>
   apiClient.post(`/reports/case/${caseId}/generate`);
@@ -99,6 +102,32 @@ export const getNarrativeDocumentReport = (caseId) =>
 
 export const getNarrativeComprehensiveReport = (caseId) =>
   apiClient.get(`/reports/case/${caseId}/narrative/comprehensive`);
+
+// Quick Scan
+export const runQuickScan = (data) =>
+  apiClient.post('/quick-scan', data);
+
+export const getQuickScan = (scanId) =>
+  apiClient.get(`/quick-scan/${scanId}`);
+
+export const getQuickScanCard = (scanId) =>
+  apiClient.get(`/quick-scan/${scanId}/card`, { responseType: 'blob' });
+
+// Admin
+export const getAdminStats = () =>
+  apiClient.get('/admin/stats');
+
+export const getAdminUsers = (params) =>
+  apiClient.get('/admin/users', { params });
+
+export const getAdminCases = (params) =>
+  apiClient.get('/admin/cases', { params });
+
+export const getAdminLogs = (params) =>
+  apiClient.get('/admin/logs', { params });
+
+export const getAdminHealth = () =>
+  apiClient.get('/admin/health');
 
 // Lenders
 export const getLenders = () =>

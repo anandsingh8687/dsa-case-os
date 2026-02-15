@@ -2,7 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
-import { isAuthenticated } from './utils/auth';
+import { isAuthenticated, isAdmin } from './utils/auth';
 
 // Layout
 import Layout from './components/layout/Layout';
@@ -17,6 +17,8 @@ import CaseDetail from './pages/CaseDetail';
 import Copilot from './pages/Copilot';
 import Settings from './pages/Settings';
 import PincodeChecker from './pages/PincodeChecker';
+import QuickScan from './pages/QuickScan';
+import AdminPanel from './pages/AdminPanel';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,6 +32,12 @@ const queryClient = new QueryClient({
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
   return isAuthenticated() ? children : <Navigate to="/login" replace />;
+};
+
+// Admin-only route
+const AdminRoute = ({ children }) => {
+  if (!isAuthenticated()) return <Navigate to="/login" replace />;
+  return isAdmin() ? children : <Navigate to="/dashboard" replace />;
 };
 
 // Public Route Component (redirect to dashboard if already logged in)
@@ -124,6 +132,26 @@ function App() {
                   <Copilot />
                 </Layout>
               </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/quick-scan"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <QuickScan />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <AdminRoute>
+                <Layout>
+                  <AdminPanel />
+                </Layout>
+              </AdminRoute>
             }
           />
           <Route

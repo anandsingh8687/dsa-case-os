@@ -12,6 +12,11 @@ export const removeToken = () => localStorage.removeItem('token');
 
 export const isAuthenticated = () => !!getToken();
 
+export const isAdmin = () => {
+  const user = getUser();
+  return user?.role === 'admin';
+};
+
 export const getUser = () => {
   const userStr = localStorage.getItem('user');
 

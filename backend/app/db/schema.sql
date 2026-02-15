@@ -310,3 +310,118 @@ CREATE TABLE copilot_queries (
 );
 
 CREATE INDEX idx_copilot_queries_user_id ON copilot_queries(user_id);
+
+-- ─── QUICK SCANS ─────────────────────────────────────────────
+CREATE TABLE quick_scans (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    loan_type       VARCHAR(10) NOT NULL,            -- BL, PL, HL, LAP
+    pincode         VARCHAR(10),
+    scan_data       JSONB NOT NULL,                  -- request + response snapshot
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_quick_scans_user_id ON quick_scans(user_id);
+CREATE INDEX idx_quick_scans_created_at ON quick_scans(created_at);
+
+-- ─── LEAD CRM ────────────────────────────────────────────────
+CREATE TABLE leads (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    assigned_to     UUID REFERENCES users(id),
+    customer_name   VARCHAR(255),
+    phone           VARCHAR(20),
+    email           VARCHAR(255),
+    loan_type_interest VARCHAR(20),                  -- BL, PL, HL, LAP, UNKNOWN
+    loan_amount_approx FLOAT,
+    city            VARCHAR(100),
+    pincode         VARCHAR(10),
+    source          VARCHAR(20),                     -- call, whatsapp, referral, etc.
+    stage           VARCHAR(30) DEFAULT 'new',
+    case_id         UUID REFERENCES cases(id),
+    next_followup_date DATE,
+    last_activity_at TIMESTAMPTZ DEFAULT NOW(),
+    created_by      UUID REFERENCES users(id),
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_leads_assigned_to ON leads(assigned_to);
+CREATE INDEX idx_leads_stage ON leads(stage);
+CREATE INDEX idx_leads_case_id ON leads(case_id);
+
+CREATE TABLE lead_activities (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    lead_id         UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+    user_id         UUID REFERENCES users(id),
+    activity_type   VARCHAR(30),                     -- call, whatsapp, email, note, stage_change
+    notes           TEXT,
+    call_outcome    VARCHAR(30),
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_lead_activities_lead_id ON lead_activities(lead_id);
+
+-- ─── SUBMISSION TRACKER ──────────────────────────────────────
+CREATE TABLE lender_submissions (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    case_id         UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    lender_name     VARCHAR(255) NOT NULL,
+    product_type    VARCHAR(20),
+    stage           VARCHAR(30) DEFAULT 'submitted',
+    submitted_date  DATE,
+    sanctioned_amount FLOAT,
+    disbursed_amount FLOAT,
+    disbursement_date DATE,
+    rejection_reason VARCHAR(255),
+    notes           TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_lender_submissions_case_id ON lender_submissions(case_id);
+CREATE INDEX idx_lender_submissions_stage ON lender_submissions(stage);
+
+CREATE TABLE submission_queries (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    submission_id   UUID NOT NULL REFERENCES lender_submissions(id) ON DELETE CASCADE,
+    query_text      TEXT,
+    response_text   TEXT,
+    raised_date     DATE,
+    resolved_date   DATE,
+    status          VARCHAR(20) DEFAULT 'open',
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_submission_queries_submission_id ON submission_queries(submission_id);
+
+-- ─── COMMISSION TRACKING ─────────────────────────────────────
+CREATE TABLE dsa_commission_rates (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    lender_name     VARCHAR(255) NOT NULL,
+    loan_type       VARCHAR(20) NOT NULL,
+    commission_pct  FLOAT NOT NULL,
+    notes           VARCHAR(255),
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, lender_name, loan_type)
+);
+
+CREATE INDEX idx_commission_rates_user_id ON dsa_commission_rates(user_id);
+
+CREATE TABLE commission_payouts (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    case_id         UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    lender_name     VARCHAR(255),
+    disbursed_amount FLOAT,
+    commission_pct  FLOAT,
+    commission_amount FLOAT,
+    disbursement_date DATE,
+    expected_payout_date DATE,
+    actual_payout_date DATE,
+    payout_status   VARCHAR(20) DEFAULT 'pending',
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_commission_payouts_case_id ON commission_payouts(case_id);
+CREATE INDEX idx_commission_payouts_user_id ON commission_payouts(user_id);

@@ -93,8 +93,13 @@ async def _ensure_schema_tables() -> None:
         # Execute schema - use IF NOT EXISTS logic
         # Split by semicolons and execute each statement
         for statement in schema_sql.split(';'):
-            statement = statement.strip()
-            if not statement or statement.startswith('--'):
+            # Drop comment-only lines so statements preceded by comments still execute.
+            lines = [
+                line for line in statement.splitlines()
+                if not line.strip().startswith('--')
+            ]
+            statement = '\n'.join(lines).strip()
+            if not statement:
                 continue
             try:
                 # Add IF NOT EXISTS where possible

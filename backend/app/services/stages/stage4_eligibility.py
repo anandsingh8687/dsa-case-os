@@ -612,6 +612,13 @@ async def score_case_eligibility(
                         "max_ticket_size": lender.max_ticket_size,
                         "min_abb": lender.min_abb,
                     },
+                    "lender_terms": {
+                        "interest_rate_range": lender.interest_rate_range,
+                        "processing_fee_pct": lender.processing_fee_pct,
+                        "expected_tat_days": lender.expected_tat_days,
+                        "tenor_min_months": lender.tenor_min_months,
+                        "tenor_max_months": lender.tenor_max_months,
+                    },
                 },
                 eligibility_score=score,
                 approval_probability=probability,

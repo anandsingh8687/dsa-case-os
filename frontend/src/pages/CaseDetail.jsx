@@ -10,6 +10,8 @@ import {
   FileDown,
   Download,
   Play,
+  Calculator,
+  BarChart3,
 } from 'lucide-react';
 import {
   getCase,
@@ -18,6 +20,7 @@ import {
   getDocumentChecklist,
   getFeatureVector,
   getEligibilityResults,
+  getEligibilityExplanation,
   runExtraction,
   runScoring,
   generateReport,
@@ -29,6 +32,62 @@ import {
 import { Card, Button, Badge, Loading, ProgressBar, Modal } from '../components/ui';
 import { formatPercentage, formatCurrency, formatDate } from '../utils/format';
 
+const lakhToRupees = (valueInLakhs) => {
+  if (valueInLakhs === null || valueInLakhs === undefined || Number.isNaN(Number(valueInLakhs))) {
+    return null;
+  }
+  return Number(valueInLakhs) * 100000;
+};
+
+const formatLakhAmount = (valueInLakhs) => {
+  const rupees = lakhToRupees(valueInLakhs);
+  return formatCurrency(rupees);
+};
+
+const parseInterestRange = (rawRange) => {
+  if (!rawRange || typeof rawRange !== 'string') return null;
+  const nums = rawRange.match(/\\d+(?:\\.\\d+)?/g);
+  if (!nums || nums.length === 0) return null;
+  const values = nums.map((n) => Number(n)).filter((n) => Number.isFinite(n));
+  if (values.length === 0) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  return { min, max, midpoint: (min + max) / 2 };
+};
+
+const calculateEmi = (principal, annualRatePct, tenureMonths) => {
+  if (!principal || !annualRatePct || !tenureMonths) return null;
+  const monthlyRate = annualRatePct / 12 / 100;
+  if (monthlyRate === 0) return principal / tenureMonths;
+  const factor = Math.pow(1 + monthlyRate, tenureMonths);
+  return (principal * monthlyRate * factor) / (factor - 1);
+};
+
+const buildRpsSchedule = (principal, annualRatePct, tenureMonths, rows = 12) => {
+  const emi = calculateEmi(principal, annualRatePct, tenureMonths);
+  if (!emi) return [];
+  const monthlyRate = annualRatePct / 12 / 100;
+  const schedule = [];
+  let opening = principal;
+  for (let month = 1; month <= tenureMonths; month += 1) {
+    const interest = opening * monthlyRate;
+    const principalPart = emi - interest;
+    const closing = Math.max(0, opening - principalPart);
+    if (month <= rows) {
+      schedule.push({
+        month,
+        opening,
+        emi,
+        principal: principalPart,
+        interest,
+        closing,
+      });
+    }
+    opening = closing;
+  }
+  return schedule;
+};
+
 const CaseDetail = () => {
   const { caseId } = useParams();
   const queryClient = useQueryClient();
@@ -36,6 +95,9 @@ const CaseDetail = () => {
   const [selectedProgram, setSelectedProgram] = useState('banking');
   const [selectedLender, setSelectedLender] = useState(null);
   const [manualCibil, setManualCibil] = useState('');
+  const [emiLoanAmountLakhs, setEmiLoanAmountLakhs] = useState(10);
+  const [emiTenureMonths, setEmiTenureMonths] = useState(36);
+  const [rpsPreview, setRpsPreview] = useState(null);
 
   const { data: caseData, isLoading: caseLoading } = useQuery({
     queryKey: ['case', caseId],
@@ -57,13 +119,20 @@ const CaseDetail = () => {
   const { data: featuresData } = useQuery({
     queryKey: ['features', caseId],
     queryFn: () => getFeatureVector(caseId),
-    enabled: activeTab === 'profile',
+    enabled: activeTab === 'profile' || activeTab === 'eligibility',
   });
 
   const { data: eligibilityData } = useQuery({
     queryKey: ['eligibility', caseId],
     queryFn: () => getEligibilityResults(caseId),
     enabled: activeTab === 'eligibility',
+  });
+
+  const { data: eligibilityExplainData } = useQuery({
+    queryKey: ['eligibility-explain', caseId],
+    queryFn: () => getEligibilityExplanation(caseId),
+    enabled: activeTab === 'eligibility',
+    retry: 1,
   });
 
   const { data: caseReportData } = useQuery({
@@ -135,6 +204,7 @@ const CaseDetail = () => {
   const checklist = checklistData?.data || {};
   const features = featuresData?.data || {};
   const eligibility = eligibilityData?.data || {};
+  const eligibilityExplain = eligibilityExplainData?.data || null;
   const caseReport = caseReportData?.data || null;
   const whatsappSummary = typeof whatsappSummaryData?.data === 'string' ? whatsappSummaryData.data : '';
   const comprehensiveNarrative = comprehensiveNarrativeData?.data || null;
@@ -144,6 +214,9 @@ const CaseDetail = () => {
   const rejectedEligibilityResults = Array.isArray(eligibility?.results)
     ? eligibility.results.filter((result) => result.hard_filter_status === 'fail')
     : [];
+  const firstMatchTicket = matchingEligibilityResults[0]?.expected_ticket_max;
+
+  const emiLoanAmountRupees = lakhToRupees(emiLoanAmountLakhs);
 
   const runFullPipelineMutation = useMutation({
     mutationFn: async () => {
@@ -193,6 +266,19 @@ const CaseDetail = () => {
       '';
     setManualCibil(initialCibil === null || initialCibil === undefined ? '' : String(initialCibil));
   }, [features?.cibil_score, caseInfo?.cibil_score_manual]);
+
+  useEffect(() => {
+    const requested = Number(caseInfo?.loan_amount_requested);
+    if (Number.isFinite(requested) && requested > 0) {
+      setEmiLoanAmountLakhs(requested);
+      return;
+    }
+
+    const suggested = Number(firstMatchTicket);
+    if (Number.isFinite(suggested) && suggested > 0) {
+      setEmiLoanAmountLakhs(suggested);
+    }
+  }, [caseInfo?.loan_amount_requested, firstMatchTicket]);
 
   const tabs = [
     { id: 'documents', label: 'Documents', icon: FileText },
@@ -644,6 +730,13 @@ const CaseDetail = () => {
 
             {Array.isArray(eligibility?.results) && eligibility.results.length > 0 ? (
               <>
+                {eligibilityExplain?.executive_summary && (
+                  <div className="mb-6 bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+                    <h4 className="font-semibold text-indigo-900 mb-2">BRE Summary</h4>
+                    <p className="text-sm text-indigo-900">{eligibilityExplain.executive_summary}</p>
+                  </div>
+                )}
+
                 {/* Rejection Analysis (when all lenders fail) */}
                 {eligibility.lenders_passed === 0 && eligibility.rejection_reasons && eligibility.rejection_reasons.length > 0 && (
                   <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-6">
@@ -674,6 +767,13 @@ const CaseDetail = () => {
                 {Array.isArray(eligibility.dynamic_recommendations) && eligibility.dynamic_recommendations.length > 0 && (
                   <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-6">
                     <h4 className="font-semibold text-blue-900 mb-3">Top Improvement Recommendations</h4>
+                    {Array.isArray(eligibilityExplain?.top_actions) && eligibilityExplain.top_actions.length > 0 && (
+                      <ul className="mb-4 text-sm text-blue-900 space-y-1">
+                        {eligibilityExplain.top_actions.slice(0, 3).map((action, idx) => (
+                          <li key={`top-action-${idx}`}>• {action}</li>
+                        ))}
+                      </ul>
+                    )}
                     <div className="space-y-2 text-sm">
                       {eligibility.dynamic_recommendations.slice(0, 4).map((rec, idx) => (
                         <div key={`rec-${idx}`} className="bg-white border border-blue-100 rounded-md p-3">
@@ -755,7 +855,7 @@ const CaseDetail = () => {
                               </Badge>
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap font-medium">
-                              {formatCurrency(result.expected_ticket_max)}
+                              {formatLakhAmount(result.expected_ticket_max)}
                             </td>
                             <td className="px-6 py-4 text-sm text-gray-600">
                               {scoreBreakdown.length > 0
@@ -768,6 +868,116 @@ const CaseDetail = () => {
                     </tbody>
                   </table>
                 </div>
+
+                {/* EMI Comparison + RPS (Feature 5) */}
+                {matchingEligibilityResults.length > 0 && (
+                  <div className="mt-8 rounded-lg border border-gray-200 p-4">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Calculator className="w-5 h-5 text-primary" />
+                      <h3 className="text-lg font-semibold text-gray-900">EMI Comparison & Repayment Schedule</h3>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">Loan Amount (Lakhs)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          step="0.5"
+                          value={emiLoanAmountLakhs}
+                          onChange={(e) => setEmiLoanAmountLakhs(Number(e.target.value || 0))}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">Tenure (Months)</label>
+                        <input
+                          type="number"
+                          min="6"
+                          max="120"
+                          value={emiTenureMonths}
+                          onChange={(e) => setEmiTenureMonths(Number(e.target.value || 0))}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div className="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-sm">
+                        <div className="text-gray-600">Affordability Headroom</div>
+                        <div className="font-semibold text-gray-900 mt-1">
+                          {(() => {
+                            const monthlyInflow = Number(features.monthly_credit_avg || 0);
+                            const existingEmi = Number(features.emi_outflow_monthly || 0);
+                            if (!monthlyInflow) return 'N/A';
+                            const capacity = Math.max(0, monthlyInflow * 0.5 - existingEmi);
+                            return `${formatCurrency(capacity)} / month`;
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto border border-gray-200 rounded-lg">
+                      <table className="min-w-full divide-y divide-gray-200 text-sm">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Lender</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Rate</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Monthly EMI</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Cost</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Processing Fee</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">RPS</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-100">
+                          {matchingEligibilityResults.map((result, idx) => {
+                            const lenderTerms = result?.hard_filter_details?.lender_terms || {};
+                            const rateRange = parseInterestRange(lenderTerms.interest_rate_range);
+                            const annualRate = rateRange?.midpoint || 18;
+                            const emi = calculateEmi(emiLoanAmountRupees, annualRate, emiTenureMonths);
+                            const totalCost = emi ? emi * emiTenureMonths : null;
+                            const processingFeePct = Number(lenderTerms.processing_fee_pct || 0);
+                            const processingFeeAmount = emiLoanAmountRupees
+                              ? (emiLoanAmountRupees * processingFeePct) / 100
+                              : null;
+                            return (
+                              <tr key={`emi-${result.lender_name}-${idx}`}>
+                                <td className="px-4 py-3 font-medium text-gray-900">
+                                  {result.lender_name}
+                                  <div className="text-xs text-gray-500">{result.product_name}</div>
+                                </td>
+                                <td className="px-4 py-3 text-gray-700">
+                                  {lenderTerms.interest_rate_range || `${annualRate.toFixed(1)}% (assumed)`}
+                                </td>
+                                <td className="px-4 py-3 font-semibold text-gray-900">{formatCurrency(emi)}</td>
+                                <td className="px-4 py-3 text-gray-700">{formatCurrency(totalCost)}</td>
+                                <td className="px-4 py-3 text-gray-700">
+                                  {processingFeePct > 0
+                                    ? `${processingFeePct}% (${formatCurrency(processingFeeAmount)})`
+                                    : 'N/A'}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="flex items-center gap-1"
+                                    onClick={() =>
+                                      setRpsPreview({
+                                        lender: result.lender_name,
+                                        annualRate,
+                                        schedule: buildRpsSchedule(emiLoanAmountRupees, annualRate, emiTenureMonths, 18),
+                                      })
+                                    }
+                                  >
+                                    <BarChart3 className="w-3.5 h-3.5" />
+                                    View RPS
+                                  </Button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
 
                 {/* Non-matching lenders */}
                 <div className="mt-8">
@@ -927,6 +1137,50 @@ const CaseDetail = () => {
       )}
 
       <Modal
+        isOpen={!!rpsPreview}
+        onClose={() => setRpsPreview(null)}
+        title={rpsPreview ? `Repayment Schedule • ${rpsPreview.lender}` : 'Repayment Schedule'}
+        size="lg"
+      >
+        {!rpsPreview ? null : (
+          <div>
+            <div className="text-sm text-gray-600 mb-3">
+              Estimated at {rpsPreview.annualRate.toFixed(2)}% annual interest.
+            </div>
+            <div className="overflow-x-auto border border-gray-200 rounded-lg">
+              <table className="min-w-full divide-y divide-gray-200 text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Month</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Opening</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">EMI</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Principal</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Interest</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Closing</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-100">
+                  {rpsPreview.schedule.map((row) => (
+                    <tr key={`rps-${row.month}`}>
+                      <td className="px-3 py-2">{row.month}</td>
+                      <td className="px-3 py-2">{formatCurrency(row.opening)}</td>
+                      <td className="px-3 py-2">{formatCurrency(row.emi)}</td>
+                      <td className="px-3 py-2">{formatCurrency(row.principal)}</td>
+                      <td className="px-3 py-2">{formatCurrency(row.interest)}</td>
+                      <td className="px-3 py-2">{formatCurrency(row.closing)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Preview shows first {rpsPreview.schedule.length} months for quick discussion during lender/customer calls.
+            </p>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
         isOpen={!!selectedLender}
         onClose={() => setSelectedLender(null)}
         title={
@@ -995,6 +1249,44 @@ const CaseDetail = () => {
                     </div>
                   )}
                 </div>
+
+                {selectedLender?.hard_filter_details?.lender_terms && (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                    <h4 className="font-semibold text-gray-900 mb-2">Lender Commercial Terms</h4>
+                    <div className="grid grid-cols-2 gap-3 text-sm text-gray-700">
+                      <div>
+                        <span className="text-gray-500">Interest Range:</span>{' '}
+                        <span className="font-medium">
+                          {selectedLender.hard_filter_details.lender_terms.interest_rate_range || 'N/A'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Processing Fee:</span>{' '}
+                        <span className="font-medium">
+                          {selectedLender.hard_filter_details.lender_terms.processing_fee_pct !== null &&
+                          selectedLender.hard_filter_details.lender_terms.processing_fee_pct !== undefined
+                            ? `${selectedLender.hard_filter_details.lender_terms.processing_fee_pct}%`
+                            : 'N/A'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Tenure:</span>{' '}
+                        <span className="font-medium">
+                          {selectedLender.hard_filter_details.lender_terms.tenor_min_months || 'N/A'} -{' '}
+                          {selectedLender.hard_filter_details.lender_terms.tenor_max_months || 'N/A'} months
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Expected TAT:</span>{' '}
+                        <span className="font-medium">
+                          {selectedLender.hard_filter_details.lender_terms.expected_tat_days
+                            ? `${selectedLender.hard_filter_details.lender_terms.expected_tat_days} days`
+                            : 'N/A'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </>
             ) : (
               <div className="rounded-lg border border-red-200 bg-red-50 p-3">

@@ -6,15 +6,23 @@ import {
   MessageSquare,
   MapPin,
   Settings,
+  Search,
+  Shield,
 } from 'lucide-react';
+import { getUser } from '../../utils/auth';
 
 const Sidebar = () => {
+  const user = getUser();
+  const isAdmin = user?.role === 'admin';
+
   const navItems = [
     { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/cases/new', icon: FilePlus, label: 'New Case' },
+    { to: '/quick-scan', icon: Search, label: 'Quick Scan' },
     { to: '/copilot', icon: MessageSquare, label: 'Copilot' },
     { to: '/pincode-checker', icon: MapPin, label: 'Pincode Checker' },
     { to: '/settings', icon: Settings, label: 'Settings' },
+    ...(isAdmin ? [{ to: '/admin', icon: Shield, label: 'Admin' }] : []),
   ];
 
   return (

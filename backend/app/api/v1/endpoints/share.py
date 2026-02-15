@@ -193,7 +193,7 @@ async def _generate_summary_share(case_id: str) -> Optional[str]:
 
             # Get eligibility count
             eligibility_query = """
-                SELECT COUNT(*) FILTER (WHERE passed = TRUE) as passed_count,
+                SELECT COUNT(*) FILTER (WHERE hard_filter_status = 'pass') as passed_count,
                        COUNT(*) as total_count
                 FROM eligibility_results er
                 INNER JOIN cases c ON er.case_id = c.id
@@ -306,14 +306,18 @@ async def _generate_eligibility_share(case_id: str) -> Optional[str]:
             # Get eligibility results
             query = """
                 SELECT
-                    er.lender_name,
-                    er.product_name,
-                    er.passed,
-                    er.score
+                    l.lender_name,
+                    lp.product_name,
+                    er.hard_filter_status,
+                    er.eligibility_score
                 FROM eligibility_results er
+                INNER JOIN lender_products lp ON er.lender_product_id = lp.id
+                INNER JOIN lenders l ON lp.lender_id = l.id
                 INNER JOIN cases c ON er.case_id = c.id
                 WHERE c.case_id = $1
-                ORDER BY er.passed DESC, er.score DESC
+                ORDER BY
+                    CASE WHEN er.hard_filter_status = 'pass' THEN 0 ELSE 1 END,
+                    er.eligibility_score DESC NULLS LAST
                 LIMIT 10
             """
 
@@ -322,7 +326,7 @@ async def _generate_eligibility_share(case_id: str) -> Optional[str]:
             if not rows:
                 return None
 
-            passed_lenders = [r for r in rows if r['passed']]
+            passed_lenders = [r for r in rows if r['hard_filter_status'] == 'pass']
             total = len(rows)
 
             share_text = f"""🎯 *Eligibility Results*

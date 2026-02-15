@@ -193,6 +193,9 @@ class LenderProductRule(BaseModel):
     kyc_documents: Optional[str] = None
     tenor_min_months: Optional[int] = None
     tenor_max_months: Optional[int] = None
+    interest_rate_range: Optional[str] = None
+    processing_fee_pct: Optional[float] = None
+    expected_tat_days: Optional[int] = None
 
     # Verification
     tele_pd_required: bool = False
