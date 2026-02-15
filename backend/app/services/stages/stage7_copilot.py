@@ -42,6 +42,17 @@ def _sanitize_text(value: Optional[str]) -> str:
     return CONTROL_CHARS_RE.sub("", value)
 
 
+def _sanitize_payload(value: Any) -> Any:
+    """Recursively sanitize string content inside lists/dicts."""
+    if isinstance(value, str):
+        return _sanitize_text(value)
+    if isinstance(value, list):
+        return [_sanitize_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _sanitize_payload(item) for key, item in value.items()}
+    return value
+
+
 # ═══════════════════════════════════════════════════════════════
 # COPILOT SERVICE
 # ═══════════════════════════════════════════════════════════════
@@ -76,7 +87,7 @@ async def query_copilot(query: str, user_id: Optional[str] = None) -> CopilotRes
         answer = _sanitize_text(answer)
 
         # Step 4: Build sources list
-        sources = _build_sources(lender_data, query_type)
+        sources = _sanitize_payload(_build_sources(lender_data, query_type))
 
         # Step 5: Calculate response time
         response_time_ms = int((time.time() - start_time) * 1000)
