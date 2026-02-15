@@ -414,7 +414,7 @@ class DocumentClassifier:
                 scores=scores
             )
         except Exception as e:
-            print(f"Error in ML classification: {e}")
+            # Fallback to keyword/filename classifiers if ML pipeline is unavailable.
             return None
 
     def _classify_with_keywords(self, ocr_text: str) -> ClassificationResult:
