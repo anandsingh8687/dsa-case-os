@@ -128,6 +128,21 @@ async def _generate_pitch_summary(payload: Dict[str, Any]) -> str:
         return fallback
 
 
+def _decode_scan_data(raw_value: Any) -> Dict[str, Any]:
+    """Normalize quick scan payload from JSONB driver return types."""
+    if raw_value is None:
+        return {}
+    if isinstance(raw_value, dict):
+        return raw_value
+    if isinstance(raw_value, str):
+        try:
+            parsed = json.loads(raw_value)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
 @router.post("", response_model=QuickScanResponse)
 async def run_quick_scan(request: QuickScanRequest, current_user: CurrentUser):
     """Run instant BL quick scan against current lender rule base."""
@@ -246,7 +261,7 @@ async def get_quick_scan(scan_id: UUID, current_user: CurrentUser):
     if not row:
         raise HTTPException(status_code=404, detail="Quick scan not found")
 
-    payload = row["scan_data"] or {}
+    payload = _decode_scan_data(row["scan_data"])
     response = payload.get("response") or {}
     response["scan_id"] = str(scan_id)
     return QuickScanResponse(**response)
@@ -269,7 +284,7 @@ async def get_quick_scan_card(scan_id: UUID, current_user: CurrentUser):
     if not row:
         raise HTTPException(status_code=404, detail="Quick scan not found")
 
-    payload = row["scan_data"] or {}
+    payload = _decode_scan_data(row["scan_data"])
     response = payload.get("response") or {}
 
     width, height = 1200, 675
