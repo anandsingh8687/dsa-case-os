@@ -275,6 +275,27 @@ async def get_manual_field_prompts(
         )
 
 
+@router.get("/{case_id}/status")
+async def get_case_status(
+    case_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get lightweight processing status for a case.
+
+    Used by frontend polling after document upload to avoid fixed delays.
+    """
+    service = CaseEntryService(db)
+    case = await service._get_case_by_case_id(case_id, current_user.id)
+
+    return {
+        "case_id": case.case_id,
+        "status": case.status,
+        "updated_at": case.updated_at,
+        "has_gst_data": bool(case.gst_data),
+    }
+
+
 @router.get("/{case_id}/gst-data")
 async def get_gst_data(
     case_id: str,

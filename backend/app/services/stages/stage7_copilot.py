@@ -16,7 +16,7 @@ Uses Kimi 2.5 (Moonshot AI) via OpenAI-compatible API.
 import logging
 import json
 import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from datetime import datetime
 
 from openai import AsyncOpenAI
@@ -103,6 +103,17 @@ async def query_copilot(query: str, user_id: Optional[str] = None) -> CopilotRes
 # CONVERSATION MEMORY
 # ═══════════════════════════════════════════════════════════════
 
+async def _get_copilot_table_columns(db) -> Set[str]:
+    """Return available columns in copilot_queries table for schema compatibility."""
+    rows = await db.fetch(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'copilot_queries'
+        """
+    )
+    return {row["column_name"] for row in rows}
+
 async def _get_conversation_history(user_id: Optional[str]) -> List[Dict[str, str]]:
     """Retrieve recent conversation history for a user.
 
@@ -117,24 +128,56 @@ async def _get_conversation_history(user_id: Optional[str]) -> List[Dict[str, st
 
     try:
         async with get_db_session() as db:
-            # Get last 10 queries from this user (we'll use last 5 in the prompt)
-            rows = await db.fetch(
-                """
-                SELECT query_text, response_text, created_at
-                FROM copilot_queries
-                WHERE user_id = $1
-                ORDER BY created_at DESC
-                LIMIT 10
-                """,
-                user_id
-            )
+            columns = await _get_copilot_table_columns(db)
+            query_col = "query_text" if "query_text" in columns else "user_query" if "user_query" in columns else None
+            response_col = "response_text" if "response_text" in columns else "ai_response" if "ai_response" in columns else None
+            response_expr = f"cq.{response_col}" if response_col else "NULL"
+
+            if not query_col:
+                return []
+
+            if "user_id" in columns:
+                rows = await db.fetch(
+                    f"""
+                    SELECT cq.{query_col} AS query_value, {response_expr} AS response_value, cq.created_at
+                    FROM copilot_queries cq
+                    WHERE cq.user_id = $1::uuid
+                    ORDER BY cq.created_at DESC
+                    LIMIT 10
+                    """,
+                    user_id
+                )
+            elif "case_id" in columns:
+                # Legacy schema fallback: infer user scope through cases table.
+                rows = await db.fetch(
+                    f"""
+                    SELECT cq.{query_col} AS query_value, {response_expr} AS response_value, cq.created_at
+                    FROM copilot_queries cq
+                    INNER JOIN cases c ON c.id = cq.case_id
+                    WHERE c.user_id = $1::uuid
+                    ORDER BY cq.created_at DESC
+                    LIMIT 10
+                    """,
+                    user_id
+                )
+            else:
+                rows = await db.fetch(
+                    f"""
+                    SELECT cq.{query_col} AS query_value, {response_expr} AS response_value, cq.created_at
+                    FROM copilot_queries cq
+                    ORDER BY cq.created_at DESC
+                    LIMIT 10
+                    """
+                )
 
             # Convert to conversation format (reverse to get chronological order)
             history = []
             for row in reversed(rows):
+                if not row["query_value"]:
+                    continue
                 history.append({
-                    "query": row["query_text"],
-                    "response": row["response_text"] or ""
+                    "query": row["query_value"],
+                    "response": row["response_value"] or ""
                 })
 
             return history
@@ -217,7 +260,7 @@ async def _generate_answer(
         response = await client.chat.completions.create(
             model=settings.LLM_MODEL,
             max_tokens=1024,
-            temperature=1.0,  # Required for Kimi K2.5 thinking mode
+            temperature=0.2,
             messages=messages
         )
 
@@ -606,6 +649,8 @@ async def _log_query(
     """
     try:
         async with get_db_session() as db:
+            columns = await _get_copilot_table_columns(db)
+
             # Build sources metadata
             sources_metadata = {
                 "query_type": query_type,
@@ -613,18 +658,45 @@ async def _log_query(
                 "sources_count": sources_count
             }
 
+            insert_columns = []
+            insert_values = []
+
+            if "user_id" in columns and user_id:
+                insert_columns.append("user_id")
+                insert_values.append(user_id)
+
+            if "query_text" in columns:
+                insert_columns.append("query_text")
+                insert_values.append(query)
+            elif "user_query" in columns:
+                insert_columns.append("user_query")
+                insert_values.append(query)
+            else:
+                return
+
+            if "response_text" in columns:
+                insert_columns.append("response_text")
+                insert_values.append(answer)
+            elif "ai_response" in columns:
+                insert_columns.append("ai_response")
+                insert_values.append(answer)
+
+            if "sources_used" in columns:
+                insert_columns.append("sources_used")
+                insert_values.append(json.dumps(sources_metadata))
+
+            if "response_time_ms" in columns:
+                insert_columns.append("response_time_ms")
+                insert_values.append(response_time_ms)
+
+            if "created_at" in columns:
+                insert_columns.append("created_at")
+                insert_values.append(datetime.utcnow())
+
+            placeholders = ", ".join(f"${idx}" for idx in range(1, len(insert_values) + 1))
             await db.execute(
-                """
-                INSERT INTO copilot_queries
-                (user_id, query_text, response_text, sources_used, response_time_ms, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                """,
-                user_id,
-                query,
-                answer,
-                json.dumps(sources_metadata),
-                response_time_ms,
-                datetime.utcnow()
+                f"INSERT INTO copilot_queries ({', '.join(insert_columns)}) VALUES ({placeholders})",
+                *insert_values
             )
     except Exception as e:
         # Don't fail the request if logging fails

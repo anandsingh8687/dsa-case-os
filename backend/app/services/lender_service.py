@@ -296,7 +296,10 @@ async def find_lenders_by_pincode(
                 l.id as lender_id,
                 l.lender_name,
                 l.lender_code,
-                COUNT(DISTINCT lp.id) as product_count
+                COUNT(DISTINCT lp.id) as product_count,
+                COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT lp.product_name), NULL), ARRAY[]::text[]) as product_types,
+                MIN(lp.min_cibil_score) as min_cibil,
+                MAX(lp.max_ticket_size) as max_ticket_size
             FROM lenders l
             INNER JOIN lender_pincodes lpc ON l.id = lpc.lender_id
             LEFT JOIN lender_products lp ON l.id = lp.lender_id AND lp.is_active = TRUE

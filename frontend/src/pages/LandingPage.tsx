@@ -109,6 +109,12 @@ const LandingPage = () => {
           </div>
           <div className="flex space-x-4">
             <button
+              onClick={() => window.location.href = '/pincode-checker'}
+              className="px-6 py-2 text-white hover:text-blue-300 transition"
+            >
+              Pincode Checker
+            </button>
+            <button
               onClick={() => window.location.href = APP_URL}
               className="px-6 py-2 text-white hover:text-blue-300 transition"
             >

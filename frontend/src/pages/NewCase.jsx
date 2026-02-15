@@ -1,14 +1,43 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { useDropzone } from 'react-dropzone';
 import { useMutation } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { Upload, FileText, CheckCircle, Sparkles } from 'lucide-react';
-import { createCase, uploadDocuments } from '../api/services';
+import { createCase, updateCase, uploadDocuments, getCaseStatus } from '../api/services';
 import { Button, Input, Select, Card, ProgressBar } from '../components/ui';
-import { ENTITY_TYPES, PROGRAM_TYPES } from '../utils/constants';
 import apiClient from '../api/client';
+
+const ENTITY_OPTIONS = [
+  { label: 'Proprietorship', value: 'proprietorship' },
+  { label: 'Partnership', value: 'partnership' },
+  { label: 'LLP', value: 'llp' },
+  { label: 'Private Limited', value: 'pvt_ltd' },
+  { label: 'Public Limited', value: 'public_ltd' },
+  { label: 'Trust', value: 'trust' },
+  { label: 'Society', value: 'society' },
+  { label: 'HUF', value: 'huf' },
+];
+
+const PROGRAM_OPTIONS = [
+  { label: 'Banking', value: 'banking' },
+  { label: 'Income', value: 'income' },
+  { label: 'Hybrid', value: 'hybrid' },
+];
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const toCasePayload = (data) => {
+  const normalized = { ...data };
+
+  if (normalized.industry && !normalized.industry_type) {
+    normalized.industry_type = normalized.industry;
+  }
+  delete normalized.industry;
+
+  return normalized;
+};
 
 const NewCase = () => {
   const navigate = useNavigate();
@@ -17,6 +46,7 @@ const NewCase = () => {
   const [caseId, setCaseId] = useState(null);
   const [files, setFiles] = useState([]);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [fileProgress, setFileProgress] = useState([]);
   const [gstData, setGstData] = useState(null);
   const [isCheckingGST, setIsCheckingGST] = useState(false);
 
@@ -24,9 +54,15 @@ const NewCase = () => {
     register,
     handleSubmit,
     formState: { errors },
-    getValues,
     setValue,
   } = useForm();
+
+  const updateCaseMutation = useMutation({
+    mutationFn: ({ caseId: currentCaseId, data }) => updateCase(currentCaseId, data),
+    onError: (error) => {
+      toast.error(error.response?.data?.detail || 'Failed to update case');
+    },
+  });
 
   const createCaseMutation = useMutation({
     mutationFn: createCase,
@@ -43,22 +79,71 @@ const NewCase = () => {
     },
   });
 
-  const uploadMutation = useMutation({
-    mutationFn: ({ caseId, formData }) => uploadDocuments(caseId, formData),
-    onSuccess: async () => {
-      toast.success('Documents uploaded successfully! Processing...');
+  const updateProgressByLoadedBytes = (loadedBytes, totalFileBytes) => {
+    if (!totalFileBytes) return;
 
-      // Wait a moment for processing, then check for GST data
-      setTimeout(async () => {
-        await checkForGSTData();
-        // In docs-first mode, automatically move to step 2 (review form)
-        if (workflowMode === 'docs-first') {
-          setStep(2);
-        } else {
-          // In form-first mode, move to step 3 (complete)
-          setStep(3);
+    let remaining = loadedBytes;
+    setFileProgress((prev) =>
+      prev.map((entry) => {
+        const consumed = Math.max(0, Math.min(entry.size, remaining));
+        remaining -= consumed;
+        const filePercent = entry.size ? Math.round((consumed / entry.size) * 100) : 0;
+        return { ...entry, progress: Math.max(entry.progress, Math.min(100, filePercent)) };
+      })
+    );
+  };
+
+  const waitForProcessing = async (targetCaseId) => {
+    const pendingStatuses = new Set(['created', 'processing', 'documents_classified']);
+    const maxAttempts = 30; // ~60 seconds
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await getCaseStatus(targetCaseId);
+        const statusValue = response?.data?.status;
+        if (!pendingStatuses.has(statusValue)) {
+          return statusValue;
         }
-      }, 3000); // Wait 3 seconds for GST extraction
+      } catch (error) {
+        // Keep polling even if one attempt fails.
+      }
+      await wait(2000);
+    }
+    return null;
+  };
+
+  const uploadMutation = useMutation({
+    mutationFn: ({ caseId: currentCaseId, formData, totalFileBytes }) =>
+      uploadDocuments(currentCaseId, formData, {
+        onUploadProgress: (event) => {
+          if (!event.total) return;
+          const overallProgress = Math.round((event.loaded * 100) / event.total);
+          setUploadProgress(overallProgress);
+          updateProgressByLoadedBytes(
+            Math.round((event.loaded / event.total) * totalFileBytes),
+            totalFileBytes
+          );
+        },
+      }),
+    onSuccess: async (_response, variables) => {
+      toast.success('Documents uploaded successfully! Processing...');
+      setUploadProgress(100);
+      setFileProgress((prev) => prev.map((entry) => ({ ...entry, progress: 100 })));
+
+      const finalStatus = await waitForProcessing(variables.caseId);
+      await checkForGSTData(variables.caseId);
+
+      if (!finalStatus) {
+        toast('Processing is taking longer than expected. You can continue now.', {
+          icon: '⏳',
+        });
+      }
+
+      if (workflowMode === 'docs-first') {
+        setStep(2);
+      } else {
+        setStep(3);
+      }
     },
     onError: (error) => {
       toast.error(error.response?.data?.detail || 'Failed to upload documents');
@@ -66,12 +151,12 @@ const NewCase = () => {
   });
 
   // Check if GST data is available for this case
-  const checkForGSTData = async () => {
-    if (!caseId) return;
+  const checkForGSTData = async (targetCaseId = caseId) => {
+    if (!targetCaseId) return;
 
     setIsCheckingGST(true);
     try {
-      const response = await apiClient.get(`/cases/${caseId}/gst-data`);
+      const response = await apiClient.get(`/cases/${targetCaseId}/gst-data`);
 
       if (response.data && response.data.gst_data) {
         setGstData(response.data.gst_data);
@@ -105,6 +190,14 @@ const NewCase = () => {
 
   const onDrop = (acceptedFiles) => {
     setFiles((prev) => [...prev, ...acceptedFiles]);
+    setFileProgress((prev) => [
+      ...prev,
+      ...acceptedFiles.map((file) => ({
+        name: file.name,
+        size: file.size,
+        progress: 0,
+      })),
+    ]);
   };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -119,7 +212,7 @@ const NewCase = () => {
   const handleStep1Submit = (data) => {
     console.log('[NewCase] Form submitted!', data);
     console.log('[NewCase] Creating case with mutation...');
-    createCaseMutation.mutate(data);
+    createCaseMutation.mutate(toCasePayload(data));
   };
 
   const handleStep2Submit = () => {
@@ -133,11 +226,15 @@ const NewCase = () => {
       formData.append('files', file);
     });
 
-    uploadMutation.mutate({ caseId, formData });
+    const totalFileBytes = files.reduce((acc, file) => acc + file.size, 0);
+    setUploadProgress(0);
+    setFileProgress((prev) => prev.map((entry) => ({ ...entry, progress: 0 })));
+    uploadMutation.mutate({ caseId, formData, totalFileBytes });
   };
 
   const removeFile = (index) => {
     setFiles((prev) => prev.filter((_, i) => i !== index));
+    setFileProgress((prev) => prev.filter((_, i) => i !== index));
   };
 
   // Handle docs-first workflow - create minimal case to get case ID
@@ -145,8 +242,8 @@ const NewCase = () => {
     try {
       const minimalData = {
         borrower_name: 'Pending Upload',
-        entity_type: 'Proprietorship', // Default, will be updated
-        program_type: 'Unsecured', // Default
+        entity_type: 'proprietorship',
+        program_type: 'banking',
       };
 
       const response = await createCase(minimalData);
@@ -311,7 +408,7 @@ const NewCase = () => {
             <div className="relative">
               <Select
                 label="Entity Type"
-                options={ENTITY_TYPES}
+                options={ENTITY_OPTIONS}
                 error={errors.entity_type?.message}
                 {...register('entity_type', {
                   required: 'Entity type is required',
@@ -327,7 +424,7 @@ const NewCase = () => {
 
             <Select
               label="Program Type"
-              options={PROGRAM_TYPES}
+              options={PROGRAM_OPTIONS}
               error={errors.program_type?.message}
               {...register('program_type', {
                 required: 'Program type is required',
@@ -447,6 +544,31 @@ const NewCase = () => {
             </div>
           )}
 
+          {uploadMutation.isPending && (
+            <div className="mt-4 space-y-3">
+              <div>
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="text-gray-600">Upload Progress</span>
+                  <span className="font-medium">{uploadProgress}%</span>
+                </div>
+                <ProgressBar value={uploadProgress} max={100} />
+              </div>
+              {fileProgress.length > 0 && (
+                <div className="space-y-2">
+                  {fileProgress.map((entry, index) => (
+                    <div key={`${entry.name}-${index}`}>
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-gray-600 truncate">{entry.name}</span>
+                        <span>{entry.progress}%</span>
+                      </div>
+                      <ProgressBar value={entry.progress} max={100} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex justify-between mt-6">
             <Button variant="outline" onClick={() => setStep(0)}>
               Back
@@ -540,6 +662,31 @@ const NewCase = () => {
             </div>
           )}
 
+          {uploadMutation.isPending && (
+            <div className="mt-4 space-y-3">
+              <div>
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="text-gray-600">Upload Progress</span>
+                  <span className="font-medium">{uploadProgress}%</span>
+                </div>
+                <ProgressBar value={uploadProgress} max={100} />
+              </div>
+              {fileProgress.length > 0 && (
+                <div className="space-y-2">
+                  {fileProgress.map((entry, index) => (
+                    <div key={`${entry.name}-${index}`}>
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-gray-600 truncate">{entry.name}</span>
+                        <span>{entry.progress}%</span>
+                      </div>
+                      <ProgressBar value={entry.progress} max={100} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex justify-between mt-6">
             <Button variant="outline" onClick={() => setStep(1)}>
               Back
@@ -583,9 +730,16 @@ const NewCase = () => {
             </div>
           )}
 
-          <form onSubmit={handleSubmit((data) => {
-            // Update the case with complete data
-            createCaseMutation.mutate(data);
+          <form onSubmit={handleSubmit(async (data) => {
+            if (!caseId) {
+              toast.error('Case not found. Please restart this flow.');
+              return;
+            }
+            await updateCaseMutation.mutateAsync({
+              caseId,
+              data: toCasePayload(data),
+            });
+            toast.success('Case details saved!');
             setStep(3);
           })}>
             <div className="relative">
@@ -608,7 +762,7 @@ const NewCase = () => {
             <div className="relative">
               <Select
                 label="Entity Type"
-                options={ENTITY_TYPES}
+                options={ENTITY_OPTIONS}
                 error={errors.entity_type?.message}
                 {...register('entity_type', {
                   required: 'Entity type is required',
@@ -624,7 +778,7 @@ const NewCase = () => {
 
             <Select
               label="Program Type"
-              options={PROGRAM_TYPES}
+              options={PROGRAM_OPTIONS}
               error={errors.program_type?.message}
               {...register('program_type', {
                 required: 'Program type is required',
@@ -665,9 +819,9 @@ const NewCase = () => {
               <Button
                 type="submit"
                 variant="primary"
-                disabled={createCaseMutation.isPending}
+                disabled={updateCaseMutation.isPending}
               >
-                {createCaseMutation.isPending ? 'Saving...' : 'Complete Case'}
+                {updateCaseMutation.isPending ? 'Saving...' : 'Complete Case'}
               </Button>
             </div>
           </form>

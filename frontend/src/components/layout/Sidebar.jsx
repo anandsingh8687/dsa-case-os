@@ -5,6 +5,7 @@ import {
   FilePlus,
   MessageSquare,
   Building2,
+  MapPin,
   Settings,
 } from 'lucide-react';
 
@@ -14,6 +15,7 @@ const Sidebar = () => {
     { to: '/cases/new', icon: FilePlus, label: 'New Case' },
     { to: '/copilot', icon: MessageSquare, label: 'Copilot' },
     { to: '/lenders', icon: Building2, label: 'Lenders' },
+    { to: '/pincode-checker', icon: MapPin, label: 'Pincode Checker' },
     { to: '/settings', icon: Settings, label: 'Settings' },
   ];
 

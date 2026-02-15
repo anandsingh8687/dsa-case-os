@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.db.database import init_db, close_db
 from app.api.v1.endpoints import (
     auth, cases, documents, extraction,
-    eligibility, reports, copilot, lenders, whatsapp, share,
+    eligibility, reports, copilot, lenders, whatsapp, share, pincodes,
     flexible_case, batch_upload, bank_statement
 )
 
@@ -105,6 +105,7 @@ app.include_router(eligibility.router, prefix=settings.API_PREFIX, tags=["Eligib
 app.include_router(reports.router,     prefix=settings.API_PREFIX, tags=["Reports"])
 app.include_router(copilot.router,     prefix=settings.API_PREFIX, tags=["Copilot"])
 app.include_router(lenders.router,     prefix=settings.API_PREFIX, tags=["Lenders"])
+app.include_router(pincodes.router,    prefix=settings.API_PREFIX, tags=["Pincodes"])
 app.include_router(whatsapp.router,    prefix=f"{settings.API_PREFIX}/whatsapp", tags=["WhatsApp"])
 app.include_router(share.router,       prefix=settings.API_PREFIX, tags=["Share"])
 app.include_router(flexible_case.router, prefix=settings.API_PREFIX, tags=["Flexible Case"])

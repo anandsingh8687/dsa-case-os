@@ -34,7 +34,7 @@ apiClient.interceptors.response.use(
     // This prevents redirect loops after login
     if (error.response?.status === 401) {
       const currentPath = window.location.pathname;
-      const isPublicPage = ['/', '/login', '/register'].includes(currentPath);
+      const isPublicPage = ['/', '/login', '/register', '/pincode-checker'].includes(currentPath);
 
       if (!isPublicPage) {
         localStorage.removeItem('token');

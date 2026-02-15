@@ -20,10 +20,14 @@ export const getCase = (caseId) =>
 export const updateCase = (caseId, data) =>
   apiClient.patch(`/cases/${caseId}`, data);
 
-export const uploadDocuments = (caseId, formData) =>
+export const uploadDocuments = (caseId, formData, config = {}) =>
   apiClient.post(`/cases/${caseId}/upload`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    ...config,
   });
+
+export const getCaseStatus = (caseId) =>
+  apiClient.get(`/cases/${caseId}/status`);
 
 export const getDocumentChecklist = (caseId, programType) =>
   apiClient.get(`/cases/${caseId}/checklist`, {
