@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { Plus, Search } from 'lucide-react';
-import { getCases } from '../api/services';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import toast from 'react-hot-toast';
+import { Plus, Search, Trash2 } from 'lucide-react';
+import { getCases, deleteCase } from '../api/services';
 import { Card, Button, Badge, Loading, ProgressBar } from '../components/ui';
 import { CASE_STATUSES } from '../utils/constants';
 import { formatDate, formatPercentage } from '../utils/format';
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState('');
 
   const { data: casesData, isLoading, error } = useQuery({
@@ -16,6 +18,17 @@ const Dashboard = () => {
     queryFn: () => getCases(),
     retry: 2,
     retryDelay: 1000,
+  });
+
+  const deleteCaseMutation = useMutation({
+    mutationFn: (caseId) => deleteCase(caseId),
+    onSuccess: () => {
+      toast.success('Case deleted');
+      queryClient.invalidateQueries({ queryKey: ['cases'] });
+    },
+    onError: (apiError) => {
+      toast.error(apiError.response?.data?.detail || 'Failed to delete case');
+    },
   });
 
   const cases = Array.isArray(casesData?.data) ? casesData.data : [];
@@ -152,6 +165,28 @@ const Dashboard = () => {
                   >
                     {statusInfo.label}
                   </Badge>
+                </div>
+
+                <div className="mb-3">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+                    disabled={deleteCaseMutation.isPending}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      const confirmed = window.confirm(
+                        `Delete case ${caseItem.case_id}? This cannot be undone.`
+                      );
+                      if (!confirmed) return;
+                      deleteCaseMutation.mutate(caseItem.case_id);
+                    }}
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Delete
+                    </span>
+                  </Button>
                 </div>
 
                 <div className="space-y-2 text-sm">

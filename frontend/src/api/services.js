@@ -26,6 +26,9 @@ export const getCaseDocuments = (caseId) =>
 export const updateCase = (caseId, data) =>
   apiClient.patch(`/cases/${caseId}`, data);
 
+export const deleteCase = (caseId) =>
+  apiClient.delete(`/cases/${caseId}`);
+
 export const uploadDocuments = (caseId, formData, config = {}) =>
   apiClient.post(`/cases/${caseId}/upload`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -131,6 +134,12 @@ export const getAdminLogs = (params) =>
 
 export const getAdminHealth = () =>
   apiClient.get('/admin/health');
+
+export const getAdminUserUsage = (params) =>
+  apiClient.get('/admin/user-usage', { params });
+
+export const getAdminActivityFeed = (params) =>
+  apiClient.get('/admin/activity-feed', { params });
 
 // Commission
 export const getCommissionOverview = () =>

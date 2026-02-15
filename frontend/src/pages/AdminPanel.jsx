@@ -8,12 +8,15 @@ import {
   getAdminCases,
   getAdminLogs,
   getAdminHealth,
+  getAdminUserUsage,
+  getAdminActivityFeed,
 } from '../api/services';
 import { Card, Loading, Badge } from '../components/ui';
 import { formatDate, formatPercentage } from '../utils/format';
 
 const AdminPanel = () => {
   const [searchUser, setSearchUser] = useState('');
+  const [usageDays, setUsageDays] = useState(30);
 
   const { data: statsData, isLoading: statsLoading } = useQuery({
     queryKey: ['admin-stats'],
@@ -46,11 +49,30 @@ const AdminPanel = () => {
     refetchInterval: 30000,
   });
 
+  const { data: usageData, isLoading: usageLoading } = useQuery({
+    queryKey: ['admin-user-usage', searchUser, usageDays],
+    queryFn: () =>
+      getAdminUserUsage({
+        q: searchUser || undefined,
+        days: usageDays,
+        limit: 120,
+      }),
+    retry: 1,
+  });
+
+  const { data: activityData, isLoading: activityLoading } = useQuery({
+    queryKey: ['admin-activity-feed'],
+    queryFn: () => getAdminActivityFeed({ days: 7, limit: 80 }),
+    retry: 1,
+  });
+
   const stats = statsData?.data;
   const users = usersData?.data || [];
   const cases = casesData?.data || [];
   const logs = logsData?.data || {};
   const health = healthData?.data;
+  const usageRows = usageData?.data || [];
+  const activityFeed = activityData?.data || [];
 
   const topStatuses = useMemo(() => {
     const distribution = stats?.status_distribution || {};
@@ -96,6 +118,29 @@ const AdminPanel = () => {
           <div className="text-sm text-gray-600">Avg Completeness</div>
           <div className="text-3xl font-bold text-primary mt-1">{formatPercentage(stats?.avg_case_completeness || 0)}</div>
           <div className="text-xs text-gray-500 mt-1">Documents: {stats?.documents_total || 0}</div>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card>
+          <div className="text-sm text-gray-600">Quick Scans</div>
+          <div className="text-3xl font-bold text-blue-700 mt-1">{stats?.quick_scans_total || 0}</div>
+          <div className="text-xs text-gray-500 mt-1">Last 7d: {stats?.quick_scans_7d || 0}</div>
+        </Card>
+        <Card>
+          <div className="text-sm text-gray-600">Copilot Queries</div>
+          <div className="text-3xl font-bold text-purple-700 mt-1">{stats?.copilot_queries_7d || 0}</div>
+          <div className="text-xs text-gray-500 mt-1">Last 7d activity</div>
+        </Card>
+        <Card>
+          <div className="text-sm text-gray-600">Leads</div>
+          <div className="text-3xl font-bold text-teal-700 mt-1">{stats?.leads_total || 0}</div>
+          <div className="text-xs text-gray-500 mt-1">Last 7d: {stats?.leads_7d || 0}</div>
+        </Card>
+        <Card>
+          <div className="text-sm text-gray-600">Submissions</div>
+          <div className="text-3xl font-bold text-indigo-700 mt-1">{stats?.submissions_total || 0}</div>
+          <div className="text-xs text-gray-500 mt-1">Last 7d: {stats?.submissions_7d || 0}</div>
         </Card>
       </div>
 
@@ -217,6 +262,76 @@ const AdminPanel = () => {
       </Card>
 
       <Card>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">User Feature Usage Matrix</h2>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-gray-600">Window</label>
+            <select
+              value={usageDays}
+              onChange={(e) => setUsageDays(Number(e.target.value))}
+              className="border border-gray-300 rounded-lg px-2 py-1 text-sm"
+            >
+              <option value={7}>7 days</option>
+              <option value={30}>30 days</option>
+              <option value={60}>60 days</option>
+            </select>
+          </div>
+        </div>
+        {usageLoading ? (
+          <Loading text="Loading usage matrix..." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">User</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Cases</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Docs</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Quick Scan</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Copilot</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Leads</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Submissions</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Failed Cases</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Last Activity</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-100">
+                {usageRows.map((row) => (
+                  <tr key={row.id}>
+                    <td className="px-3 py-2">
+                      <div className="font-medium text-gray-900">{row.full_name}</div>
+                      <div className="text-xs text-gray-500">{row.email}</div>
+                    </td>
+                    <td className="px-3 py-2 text-gray-700">{row.cases_total}</td>
+                    <td className="px-3 py-2 text-gray-700">{row.docs_uploaded_30d}</td>
+                    <td className="px-3 py-2 text-gray-700">{row.quick_scans_30d}</td>
+                    <td className="px-3 py-2 text-gray-700">{row.copilot_queries_30d}</td>
+                    <td className="px-3 py-2 text-gray-700">{row.leads_30d}</td>
+                    <td className="px-3 py-2 text-gray-700">{row.submissions_30d}</td>
+                    <td className="px-3 py-2">
+                      <Badge variant={row.failed_cases_30d > 0 ? 'danger' : 'success'}>
+                        {row.failed_cases_30d}
+                      </Badge>
+                    </td>
+                    <td className="px-3 py-2 text-gray-700">
+                      {row.last_activity_at ? formatDate(row.last_activity_at) : '—'}
+                    </td>
+                  </tr>
+                ))}
+                {usageRows.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="px-3 py-5 text-center text-gray-500">
+                      No usage data available.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Card>
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Cases (All Users)</h2>
         {casesLoading ? (
           <Loading text="Loading cases..." />
@@ -279,6 +394,31 @@ const AdminPanel = () => {
             )}
           </div>
         </div>
+      </Card>
+
+      <Card>
+        <h2 className="text-lg font-semibold text-gray-900 mb-3">Platform Activity Feed (7 days)</h2>
+        {activityLoading ? (
+          <Loading text="Loading activity feed..." />
+        ) : (
+          <div className="max-h-96 overflow-auto divide-y divide-gray-100 border border-gray-200 rounded-lg">
+            {activityFeed.map((event, idx) => (
+              <div key={`${event.occurred_at}-${idx}`} className="px-4 py-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-gray-900">{event.event_type}</span>
+                  <span className="text-xs text-gray-500">{formatDate(event.occurred_at)}</span>
+                </div>
+                <div className="text-gray-700 mt-1">{event.details}</div>
+                <div className="text-xs text-gray-500 mt-1">
+                  {event.actor_name || 'System'} {event.actor_email ? `(${event.actor_email})` : ''}
+                </div>
+              </div>
+            ))}
+            {activityFeed.length === 0 && (
+              <div className="px-4 py-5 text-sm text-gray-500 text-center">No activity in selected window.</div>
+            )}
+          </div>
+        )}
       </Card>
     </div>
   );

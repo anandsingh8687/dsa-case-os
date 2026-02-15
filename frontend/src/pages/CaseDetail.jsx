@@ -119,6 +119,92 @@ const buildMatchedSignalsForModal = (selectedLender, features) => {
   return fallbacks.length > 0 ? fallbacks : ['Hard filters passed for this lender profile.'];
 };
 
+const DOCUMENTATION_FRAMEWORK_2026 = {
+  commonKyc: [
+    'PAN Card',
+    'Aadhaar Card (or Passport/Voter ID)',
+    'Address proof (utility bill/rent agreement/Voter ID)',
+    'Recent passport-size photographs',
+  ],
+  banking: {
+    title: 'Business / Banking Flow',
+    sections: [
+      {
+        label: 'Core Business Proof',
+        docs: [
+          '12 months bank statements',
+          'GST certificate + latest GST returns',
+          'PAN (personal/business) + Aadhaar',
+          'Optional strengtheners: Udyam, property papers, financial statements',
+        ],
+      },
+    ],
+  },
+  income: {
+    title: 'Personal Loan Flow',
+    sections: [
+      {
+        label: 'Salaried',
+        docs: [
+          'Last 3-6 salary slips',
+          'Form 16 (2 years)',
+          '6 months salary-credit bank statements',
+          'Employment proof (if requested by lender)',
+        ],
+      },
+      {
+        label: 'Self-Employed',
+        docs: [
+          'ITR with computation (2-3 years)',
+          'Audited P&L and balance sheet',
+          'Business registration proof (GST/Trade License)',
+          '6-12 months business bank statements',
+        ],
+      },
+      {
+        label: 'Purpose-based add-ons',
+        docs: [
+          'Wedding loan: invitation card (some lenders)',
+          'Medical loan: hospital estimate/bills',
+          'Education PL: admission letter + fee structure',
+        ],
+      },
+    ],
+  },
+  hybrid: {
+    title: 'Home / Secured Loan Flow',
+    sections: [
+      {
+        label: 'Home Purchase',
+        docs: [
+          'Agreement to Sale + Sale Deed',
+          'Title/Mother deed chain',
+          'Encumbrance Certificate (13-30 years)',
+          'Approved building plan',
+        ],
+      },
+      {
+        label: 'Construction / Renovation / Plot',
+        docs: [
+          'Approved architectural plan + building permit',
+          'Engineer/architect cost estimate',
+          'Renovation quotation + ownership proof',
+          'Plot NA conversion certificate (where applicable)',
+        ],
+      },
+      {
+        label: 'NRI / Balance Transfer',
+        docs: [
+          'Passport/Visa/OCI + overseas employment proof',
+          'NRE/NRO statements (6 months)',
+          'POA (if applicable)',
+          'Foreclosure letter + LOD + repayment track for BT',
+        ],
+      },
+    ],
+  },
+};
+
 const CaseDetail = () => {
   const { caseId } = useParams();
   const queryClient = useQueryClient();
@@ -254,6 +340,8 @@ const CaseDetail = () => {
     (item) => `${item.lender_name}::${item.product_name}` === emailLenderKey
   ) || null;
   const selectedLenderSignals = buildMatchedSignalsForModal(selectedLender, features);
+  const docFramework =
+    DOCUMENTATION_FRAMEWORK_2026[selectedProgram] || DOCUMENTATION_FRAMEWORK_2026.banking;
 
   const runFullPipelineMutation = useMutation({
     mutationFn: async () => {
@@ -563,6 +651,40 @@ const CaseDetail = () => {
                     ))}
                   </ul>
                 )}
+              </div>
+            </div>
+
+            <div className="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4">
+              <h3 className="font-semibold text-gray-900 mb-2">
+                Standardized Documentation Framework (2026)
+              </h3>
+              <p className="text-xs text-gray-600 mb-3">
+                Guidance checklist to reduce back-and-forth with borrowers and improve first-pass lender submissions.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                <div className="rounded-md border border-gray-200 bg-white p-3">
+                  <div className="font-medium text-gray-900 mb-2">Core Mandatory KYC (All Loans)</div>
+                  <ul className="space-y-1 text-gray-700">
+                    {DOCUMENTATION_FRAMEWORK_2026.commonKyc.map((item) => (
+                      <li key={`kyc-${item}`}>• {item}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="rounded-md border border-gray-200 bg-white p-3">
+                  <div className="font-medium text-gray-900 mb-2">{docFramework.title}</div>
+                  <div className="space-y-3">
+                    {(docFramework.sections || []).map((section) => (
+                      <div key={section.label}>
+                        <div className="font-medium text-gray-800">{section.label}</div>
+                        <ul className="space-y-1 text-gray-700 mt-1">
+                          {section.docs.map((docLine) => (
+                            <li key={`${section.label}-${docLine}`}>• {docLine}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
 

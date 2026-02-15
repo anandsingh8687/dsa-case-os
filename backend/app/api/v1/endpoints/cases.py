@@ -162,10 +162,10 @@ async def delete_case(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Delete a case (soft delete - sets status to 'failed').
+    Permanently delete a case owned by current user.
 
-    Note: This does NOT delete associated files from storage.
-    Hard deletion can be implemented separately for cleanup.
+    Associated DB records are deleted via cascade relationships.
+    Uploaded file cleanup is attempted in storage backend.
 
     Args:
         case_id: Case ID to delete

@@ -9,7 +9,7 @@ import logging
 
 from fastapi import UploadFile, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import selectinload
 
 from app.models.case import Case, Document
@@ -495,19 +495,46 @@ class CaseEntryService:
 
     async def delete_case(self, case_id: str, user_id: UUID) -> None:
         """
-        Soft delete a case (set status to failed).
+        Permanently delete a case and all dependent records.
 
-        Note: Hard deletion would cascade to documents and files.
-        For MVP, we do soft delete. Hard delete can be added later.
+        Also attempts cleanup of stored uploaded files.
         """
         try:
             case = await self._get_case_by_case_id(case_id, user_id)
+            storage_keys = [
+                doc.storage_key for doc in case.documents
+                if doc.storage_key
+            ]
 
-            # Soft delete: set status to FAILED
-            case.status = CaseStatus.FAILED.value
+            # Prevent FK restriction from leads table where case link is optional.
+            try:
+                await self.db.execute(
+                    text("UPDATE leads SET case_id = NULL WHERE case_id = :case_uuid"),
+                    {"case_uuid": case.id},
+                )
+            except Exception as lead_fk_error:
+                logger.warning(
+                    "Could not clear lead linkage for case %s before delete: %s",
+                    case_id,
+                    lead_fk_error,
+                )
+
+            await self.db.delete(case)
             await self.db.commit()
 
-            logger.info(f"Soft deleted case: {case_id}")
+            # File cleanup is best-effort and should not rollback case deletion.
+            for storage_key in storage_keys:
+                try:
+                    await self.storage.delete_file(storage_key)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "Storage cleanup failed for case %s file %s: %s",
+                        case_id,
+                        storage_key,
+                        cleanup_error,
+                    )
+
+            logger.info(f"Deleted case: {case_id}")
 
         except HTTPException:
             raise
