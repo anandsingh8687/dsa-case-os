@@ -260,7 +260,7 @@ async def _generate_answer(
         response = await client.chat.completions.create(
             model=settings.LLM_MODEL,
             max_tokens=1024,
-            temperature=0.2,
+            temperature=1.0,
             messages=messages
         )
 
