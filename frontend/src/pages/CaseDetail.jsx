@@ -14,6 +14,7 @@ import {
 import {
   getCase,
   getCaseDocuments,
+  updateCase,
   getDocumentChecklist,
   getFeatureVector,
   getEligibilityResults,
@@ -21,8 +22,11 @@ import {
   runScoring,
   generateReport,
   getReportPdf,
+  getCaseReport,
+  getWhatsAppSummary,
+  getNarrativeComprehensiveReport,
 } from '../api/services';
-import { Card, Button, Badge, Loading, ProgressBar } from '../components/ui';
+import { Card, Button, Badge, Loading, ProgressBar, Modal } from '../components/ui';
 import { formatPercentage, formatCurrency, formatDate } from '../utils/format';
 
 const CaseDetail = () => {
@@ -30,6 +34,8 @@ const CaseDetail = () => {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState('documents');
   const [selectedProgram, setSelectedProgram] = useState('banking');
+  const [selectedLender, setSelectedLender] = useState(null);
+  const [manualCibil, setManualCibil] = useState('');
 
   const { data: caseData, isLoading: caseLoading } = useQuery({
     queryKey: ['case', caseId],
@@ -60,6 +66,27 @@ const CaseDetail = () => {
     enabled: activeTab === 'eligibility',
   });
 
+  const { data: caseReportData } = useQuery({
+    queryKey: ['case-report', caseId],
+    queryFn: () => getCaseReport(caseId),
+    enabled: activeTab === 'report' && !!caseId,
+    retry: 1,
+  });
+
+  const { data: whatsappSummaryData } = useQuery({
+    queryKey: ['report-whatsapp', caseId],
+    queryFn: () => getWhatsAppSummary(caseId),
+    enabled: activeTab === 'report' && !!caseId,
+    retry: 1,
+  });
+
+  const { data: comprehensiveNarrativeData } = useQuery({
+    queryKey: ['report-narrative-comprehensive', caseId],
+    queryFn: () => getNarrativeComprehensiveReport(caseId),
+    enabled: activeTab === 'report' && !!caseId,
+    retry: 1,
+  });
+
   const runScoringMutation = useMutation({
     mutationFn: () => runScoring(caseId),
     onSuccess: () => {
@@ -77,6 +104,9 @@ const CaseDetail = () => {
     onSuccess: () => {
       toast.success('Report generated!');
       queryClient.invalidateQueries({ queryKey: ['case', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['case-report', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['report-whatsapp', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['report-narrative-comprehensive', caseId] });
     },
     onError: (error) => {
       toast.error(error.response?.data?.detail || 'Report generation failed');
@@ -95,7 +125,7 @@ const CaseDetail = () => {
       link.remove();
       toast.success('Report downloaded!');
     },
-    onError: (error) => {
+    onError: () => {
       toast.error('Failed to download report');
     },
   });
@@ -105,8 +135,14 @@ const CaseDetail = () => {
   const checklist = checklistData?.data || {};
   const features = featuresData?.data || {};
   const eligibility = eligibilityData?.data || {};
+  const caseReport = caseReportData?.data || null;
+  const whatsappSummary = typeof whatsappSummaryData?.data === 'string' ? whatsappSummaryData.data : '';
+  const comprehensiveNarrative = comprehensiveNarrativeData?.data || null;
   const matchingEligibilityResults = Array.isArray(eligibility?.results)
     ? eligibility.results.filter((result) => result.hard_filter_status === 'pass')
+    : [];
+  const rejectedEligibilityResults = Array.isArray(eligibility?.results)
+    ? eligibility.results.filter((result) => result.hard_filter_status === 'fail')
     : [];
 
   const runFullPipelineMutation = useMutation({
@@ -127,11 +163,36 @@ const CaseDetail = () => {
     },
   });
 
+  const saveManualCibilMutation = useMutation({
+    mutationFn: (value) =>
+      updateCase(caseId, {
+        cibil_score_manual: value,
+      }),
+    onSuccess: () => {
+      toast.success('Manual CIBIL score saved.');
+      queryClient.invalidateQueries({ queryKey: ['case', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['features', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['checklist', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['eligibility', caseId] });
+    },
+    onError: (error) => {
+      toast.error(error.response?.data?.detail || 'Failed to save CIBIL score');
+    },
+  });
+
   useEffect(() => {
     if (caseInfo?.program_type) {
       setSelectedProgram(String(caseInfo.program_type).toLowerCase());
     }
   }, [caseInfo?.program_type]);
+
+  useEffect(() => {
+    const initialCibil =
+      features?.cibil_score ??
+      caseInfo?.cibil_score_manual ??
+      '';
+    setManualCibil(initialCibil === null || initialCibil === undefined ? '' : String(initialCibil));
+  }, [features?.cibil_score, caseInfo?.cibil_score_manual]);
 
   const tabs = [
     { id: 'documents', label: 'Documents', icon: FileText },
@@ -509,6 +570,40 @@ const CaseDetail = () => {
                       {features.enquiry_count_6m !== null && features.enquiry_count_6m !== undefined ? features.enquiry_count_6m : 'N/A'}
                     </span>
                   </div>
+
+                  <div className="pt-3 mt-3 border-t border-gray-100">
+                    <label className="block text-sm text-gray-600 mb-2">
+                      Manual CIBIL (if report unavailable)
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        min="300"
+                        max="900"
+                        value={manualCibil}
+                        onChange={(e) => setManualCibil(e.target.value)}
+                        placeholder="Enter tentative CIBIL"
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                      />
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          const parsed = Number(manualCibil);
+                          if (!Number.isFinite(parsed) || parsed < 300 || parsed > 900) {
+                            toast.error('Enter a valid CIBIL score between 300 and 900');
+                            return;
+                          }
+                          saveManualCibilMutation.mutate(parsed);
+                        }}
+                        disabled={saveManualCibilMutation.isPending}
+                      >
+                        {saveManualCibilMutation.isPending ? 'Saving...' : 'Save'}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-2">
+                      This value is used for scoring when CIBIL document is missing.
+                    </p>
+                  </div>
                 </div>
 
                 {/* Feature Completeness */}
@@ -549,7 +644,7 @@ const CaseDetail = () => {
 
             {Array.isArray(eligibility?.results) && eligibility.results.length > 0 ? (
               <>
-                {/* Rejection Analysis - Only show when no lenders passed */}
+                {/* Rejection Analysis (when all lenders fail) */}
                 {eligibility.lenders_passed === 0 && eligibility.rejection_reasons && eligibility.rejection_reasons.length > 0 && (
                   <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-6">
                     <h4 className="font-semibold text-red-800 mb-4 text-lg">Why No Lenders Matched</h4>
@@ -569,6 +664,26 @@ const CaseDetail = () => {
                         <div key={idx} className="flex items-start gap-2">
                           <span className="text-blue-600 mt-0.5">→</span>
                           <span className="text-sm text-gray-700">{action}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Dynamic Recommendations */}
+                {Array.isArray(eligibility.dynamic_recommendations) && eligibility.dynamic_recommendations.length > 0 && (
+                  <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-6">
+                    <h4 className="font-semibold text-blue-900 mb-3">Top Improvement Recommendations</h4>
+                    <div className="space-y-2 text-sm">
+                      {eligibility.dynamic_recommendations.slice(0, 4).map((rec, idx) => (
+                        <div key={`rec-${idx}`} className="bg-white border border-blue-100 rounded-md p-3">
+                          <div className="font-medium text-blue-900">{rec.title || rec.recommendation || 'Recommendation'}</div>
+                          {rec.impact && (
+                            <div className="text-blue-700 mt-1">Impact: {rec.impact}</div>
+                          )}
+                          {rec.detail && (
+                            <div className="text-gray-600 mt-1">{rec.detail}</div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -600,13 +715,21 @@ const CaseDetail = () => {
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                           Max Ticket
                         </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                          Why This Score
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
                       {matchingEligibilityResults.map((result, index) => {
                         const probability = String(result.approval_probability || '').toUpperCase();
+                        const scoreBreakdown = result?.hard_filter_details?.score_breakdown || [];
                         return (
-                          <tr key={result.lender_name}>
+                          <tr
+                            key={`${result.lender_name}-${result.product_name}`}
+                            className="cursor-pointer hover:bg-gray-50"
+                            onClick={() => setSelectedLender(result)}
+                          >
                             <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                               #{result.rank || index + 1}
                             </td>
@@ -634,11 +757,57 @@ const CaseDetail = () => {
                             <td className="px-6 py-4 whitespace-nowrap font-medium">
                               {formatCurrency(result.expected_ticket_max)}
                             </td>
+                            <td className="px-6 py-4 text-sm text-gray-600">
+                              {scoreBreakdown.length > 0
+                                ? `${scoreBreakdown.length} components`
+                                : 'Click to view scoring details'}
+                            </td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
+                </div>
+
+                {/* Non-matching lenders */}
+                <div className="mt-8">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3">
+                    Why Other Lenders Did Not Match ({rejectedEligibilityResults.length})
+                  </h3>
+                  {rejectedEligibilityResults.length === 0 ? (
+                    <p className="text-sm text-gray-500">All evaluated lenders matched current hard filters.</p>
+                  ) : (
+                    <div className="overflow-x-auto border border-gray-200 rounded-lg">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Lender</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Primary Reason</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-100">
+                          {rejectedEligibilityResults.map((result, idx) => {
+                            const reasons = Object.values(result.hard_filter_details || {});
+                            return (
+                              <tr
+                                key={`reject-${result.lender_name}-${result.product_name}-${idx}`}
+                                className="hover:bg-gray-50 cursor-pointer"
+                                onClick={() => setSelectedLender(result)}
+                              >
+                                <td className="px-4 py-3 text-sm font-medium text-gray-900">{result.lender_name}</td>
+                                <td className="px-4 py-3 text-sm text-gray-700">{result.product_name}</td>
+                                <td className="px-4 py-3 text-sm text-red-700">{reasons[0] || 'Hard filter not met'}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-500 mt-2">
+                    Click any lender row to view complete acceptance/rejection logic.
+                  </p>
                 </div>
               </>
             ) : (
@@ -665,6 +834,16 @@ const CaseDetail = () => {
                   : 'Generate Report'}
               </Button>
               <Button
+                onClick={() => {
+                  queryClient.invalidateQueries({ queryKey: ['case-report', caseId] });
+                  queryClient.invalidateQueries({ queryKey: ['report-whatsapp', caseId] });
+                  queryClient.invalidateQueries({ queryKey: ['report-narrative-comprehensive', caseId] });
+                }}
+                variant="outline"
+              >
+                Refresh Summary
+              </Button>
+              <Button
                 onClick={() => downloadPdfMutation.mutate()}
                 disabled={downloadPdfMutation.isPending}
                 variant="success"
@@ -676,16 +855,160 @@ const CaseDetail = () => {
             </div>
 
             {caseInfo?.status === 'report_generated' && (
-              <div className="mt-6 p-6 bg-gray-50 rounded-lg">
-                <h3 className="font-semibold mb-3">Report Preview</h3>
-                <p className="text-gray-600">
-                  Report has been generated. Download the PDF to view full details.
-                </p>
+              <div className="space-y-4">
+                <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                  <h3 className="font-semibold text-green-800 mb-1">Report Preview</h3>
+                  <p className="text-sm text-green-700">
+                    Report is generated. Download PDF for lender-ready document.
+                  </p>
+                </div>
+
+                {caseReport && (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="p-4 rounded-lg border border-gray-200 bg-gray-50">
+                      <h4 className="font-semibold mb-2">Strengths</h4>
+                      {(caseReport.strengths || []).length === 0 ? (
+                        <p className="text-sm text-gray-500">No strengths captured yet.</p>
+                      ) : (
+                        <ul className="text-sm text-gray-700 space-y-1">
+                          {(caseReport.strengths || []).map((item, idx) => (
+                            <li key={`str-${idx}`}>• {item}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    <div className="p-4 rounded-lg border border-gray-200 bg-gray-50">
+                      <h4 className="font-semibold mb-2">Risk Flags</h4>
+                      {(caseReport.risk_flags || []).length === 0 ? (
+                        <p className="text-sm text-gray-500">No major risks flagged.</p>
+                      ) : (
+                        <ul className="text-sm text-gray-700 space-y-1">
+                          {(caseReport.risk_flags || []).map((item, idx) => (
+                            <li key={`risk-${idx}`}>• {item}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    <div className="p-4 rounded-lg border border-gray-200 bg-gray-50 lg:col-span-2">
+                      <h4 className="font-semibold mb-2">Submission Strategy</h4>
+                      <p className="text-sm text-gray-700 whitespace-pre-wrap">
+                        {caseReport.submission_strategy || 'No strategy generated yet.'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {comprehensiveNarrative?.success && (
+                  <div className="p-4 rounded-lg border border-blue-200 bg-blue-50">
+                    <h4 className="font-semibold text-blue-900 mb-2">LLM Summary Journey</h4>
+                    <p className="text-sm text-blue-900 whitespace-pre-wrap">
+                      {comprehensiveNarrative?.sections?.executive_summary ||
+                        comprehensiveNarrative?.narrative ||
+                        'Narrative summary unavailable.'}
+                    </p>
+                  </div>
+                )}
+
+                {whatsappSummary && (
+                  <div className="p-4 rounded-lg border border-gray-200 bg-white">
+                    <h4 className="font-semibold mb-2">Quick Share Summary</h4>
+                    <textarea
+                      readOnly
+                      value={whatsappSummary}
+                      rows={8}
+                      className="w-full border border-gray-300 rounded-lg p-3 text-sm text-gray-700 bg-gray-50"
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
         </Card>
       )}
+
+      <Modal
+        isOpen={!!selectedLender}
+        onClose={() => setSelectedLender(null)}
+        title={
+          selectedLender
+            ? `${selectedLender.lender_name} • ${selectedLender.product_name}`
+            : 'Lender Details'
+        }
+        size="lg"
+      >
+        {!selectedLender ? null : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="text-gray-500">Status:</span>{' '}
+                <span className={`font-medium ${selectedLender.hard_filter_status === 'pass' ? 'text-green-700' : 'text-red-700'}`}>
+                  {selectedLender.hard_filter_status === 'pass' ? 'Matched' : 'Not Matched'}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-500">Score:</span>{' '}
+                <span className="font-medium">
+                  {selectedLender.eligibility_score !== null && selectedLender.eligibility_score !== undefined
+                    ? `${Math.round(selectedLender.eligibility_score)}/100`
+                    : 'N/A'}
+                </span>
+              </div>
+            </div>
+
+            {selectedLender.hard_filter_status === 'pass' ? (
+              <>
+                <div className="rounded-lg border border-green-200 bg-green-50 p-3">
+                  <h4 className="font-semibold text-green-900 mb-1">Why this lender matched</h4>
+                  <ul className="text-sm text-green-900 space-y-1">
+                    {(selectedLender?.hard_filter_details?.matched_signals || []).map((signal, idx) => (
+                      <li key={`signal-${idx}`}>• {signal}</li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div>
+                  <h4 className="font-semibold mb-2">Score Breakdown</h4>
+                  {(selectedLender?.hard_filter_details?.score_breakdown || []).length === 0 ? (
+                    <p className="text-sm text-gray-500">No component-level breakdown available yet.</p>
+                  ) : (
+                    <div className="overflow-x-auto border border-gray-200 rounded-lg">
+                      <table className="min-w-full divide-y divide-gray-200 text-sm">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Component</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Weight</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Score</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Contribution</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-100">
+                          {(selectedLender.hard_filter_details.score_breakdown || []).map((item, idx) => (
+                            <tr key={`score-part-${idx}`}>
+                              <td className="px-3 py-2">{item.label || item.component}</td>
+                              <td className="px-3 py-2">{item.weight}%</td>
+                              <td className="px-3 py-2">{Math.round(item.score || 0)}</td>
+                              <td className="px-3 py-2">{item.weighted_contribution || 0}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                <h4 className="font-semibold text-red-900 mb-2">Why this lender did not match</h4>
+                <ul className="text-sm text-red-900 space-y-1">
+                  {Object.entries(selectedLender?.hard_filter_details || {}).map(([key, reason]) => (
+                    <li key={`reason-${key}`}>• {String(reason)}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

@@ -250,7 +250,7 @@ class LLMReportService:
                         bf.business_vintage_years as feature_vintage,
                         bf.monthly_turnover,
                         bf.avg_monthly_balance,
-                        bf.bounced_cheques_count,
+                        bf.bounce_count_12m as bounced_cheques_count,
                         bf.cibil_score,
                         bf.active_loan_count,
                         bf.overdue_count,
@@ -287,14 +287,19 @@ class LLMReportService:
                 # Fetch eligibility results
                 query = """
                     SELECT
-                        lender_name,
-                        product_name,
-                        passed,
-                        score,
-                        failed_criteria
-                    FROM eligibility_results
-                    WHERE case_id = $1
-                    ORDER BY passed DESC, score DESC
+                        l.lender_name,
+                        lp.product_name,
+                        er.hard_filter_status,
+                        er.eligibility_score,
+                        er.hard_filter_details
+                    FROM eligibility_results er
+                    INNER JOIN lender_products lp ON er.lender_product_id = lp.id
+                    INNER JOIN lenders l ON lp.lender_id = l.id
+                    WHERE er.case_id = $1
+                    ORDER BY
+                        CASE WHEN er.hard_filter_status = 'pass' THEN 0 ELSE 1 END,
+                        er.rank NULLS LAST,
+                        er.eligibility_score DESC NULLS LAST
                 """
 
                 rows = await db.fetch(query, case_uuid)
@@ -302,7 +307,12 @@ class LLMReportService:
                 if not rows:
                     return None
 
-                results = [dict(row) for row in rows]
+                results = []
+                for row in rows:
+                    item = dict(row)
+                    item['passed'] = item.get('hard_filter_status') == 'pass'
+                    item['score'] = item.get('eligibility_score')
+                    results.append(item)
 
                 # Calculate summary stats
                 total = len(results)
@@ -387,7 +397,7 @@ class LLMReportService:
             response = await self.llm_client.chat.completions.create(
                 model=settings.LLM_MODEL,
                 max_tokens=2000,
-                temperature=0.3,
+                temperature=1.0,
                 messages=[
                     {
                         "role": "system",
@@ -428,7 +438,7 @@ class LLMReportService:
             response = await self.llm_client.chat.completions.create(
                 model=settings.LLM_MODEL,
                 max_tokens=2000,
-                temperature=0.3,
+                temperature=1.0,
                 messages=[
                     {
                         "role": "system",
@@ -467,7 +477,7 @@ class LLMReportService:
             response = await self.llm_client.chat.completions.create(
                 model=settings.LLM_MODEL,
                 max_tokens=1500,
-                temperature=0.3,
+                temperature=1.0,
                 messages=[
                     {
                         "role": "system",
@@ -506,7 +516,7 @@ class LLMReportService:
             response = await self.llm_client.chat.completions.create(
                 model=settings.LLM_MODEL,
                 max_tokens=3000,
-                temperature=0.3,
+                temperature=1.0,
                 messages=[
                     {
                         "role": "system",

@@ -161,29 +161,58 @@ def calculate_eligibility_score(
     - Documentation (10%)
     """
 
-    scores = []
-    weights = []
+    score, _ = calculate_eligibility_score_with_breakdown(borrower, lender)
+    return score
+
+
+def calculate_eligibility_score_with_breakdown(
+    borrower: BorrowerFeatureVector,
+    lender: LenderProductRule
+) -> Tuple[float, List[Dict[str, Any]]]:
+    """Calculate score and return component-level breakdown for explainability."""
+    components: List[Dict[str, Any]] = []
+
+    def add_component(component_key: str, label: str, weight: int, raw_score: Optional[float], note: str):
+        if raw_score is None:
+            return
+        components.append({
+            "component": component_key,
+            "label": label,
+            "weight": weight,
+            "score": round(float(raw_score), 2),
+            "weighted_contribution": round((float(raw_score) * weight) / 100.0, 2),
+            "note": note,
+        })
 
     # Component 1: CIBIL Band (25%)
     cibil_score = score_cibil_band(borrower.cibil_score)
-    if cibil_score is not None:
-        scores.append(cibil_score)
-        weights.append(25)
+    add_component(
+        "cibil_band",
+        "CIBIL Band",
+        25,
+        cibil_score,
+        f"CIBIL considered: {borrower.cibil_score if borrower.cibil_score is not None else 'N/A'}",
+    )
 
     # Component 2: Turnover Band (20%)
-    turnover_score = score_turnover_band(
-        borrower.annual_turnover,
-        lender.min_turnover_annual
+    turnover_score = score_turnover_band(borrower.annual_turnover, lender.min_turnover_annual)
+    add_component(
+        "turnover_band",
+        "Turnover Band",
+        20,
+        turnover_score,
+        f"Annual turnover: {borrower.annual_turnover if borrower.annual_turnover is not None else 'N/A'}",
     )
-    if turnover_score is not None:
-        scores.append(turnover_score)
-        weights.append(20)
 
     # Component 3: Business Vintage (15%)
     vintage_score = score_business_vintage(borrower.business_vintage_years)
-    if vintage_score is not None:
-        scores.append(vintage_score)
-        weights.append(15)
+    add_component(
+        "business_vintage",
+        "Business Vintage",
+        15,
+        vintage_score,
+        f"Vintage (years): {borrower.business_vintage_years if borrower.business_vintage_years is not None else 'N/A'}",
+    )
 
     # Component 4: Banking Strength (20%)
     banking_score = score_banking_strength(
@@ -192,33 +221,42 @@ def calculate_eligibility_score(
         borrower.cash_deposit_ratio,
         lender.min_abb
     )
-    if banking_score is not None:
-        scores.append(banking_score)
-        weights.append(20)
+    add_component(
+        "banking_strength",
+        "Banking Strength",
+        20,
+        banking_score,
+        "Based on average balance, bounce count, and cash deposit ratio",
+    )
 
     # Component 5: FOIR (10%)
-    foir_score = score_foir(
-        borrower.emi_outflow_monthly,
-        borrower.monthly_credit_avg
+    foir_score = score_foir(borrower.emi_outflow_monthly, borrower.monthly_credit_avg)
+    add_component(
+        "foir",
+        "FOIR",
+        10,
+        foir_score,
+        "Fixed obligations vs monthly inflow",
     )
-    if foir_score is not None:
-        scores.append(foir_score)
-        weights.append(10)
 
     # Component 6: Documentation (10%)
     doc_score = score_documentation(borrower, lender)
-    if doc_score is not None:
-        scores.append(doc_score)
-        weights.append(10)
+    add_component(
+        "documentation",
+        "Documentation",
+        10,
+        doc_score,
+        "Required document coverage for this lender",
+    )
 
-    # Calculate weighted average
-    if not scores:
-        return 0.0
+    if not components:
+        return 0.0, []
 
-    total_weight = sum(weights)
-    weighted_sum = sum(s * w for s, w in zip(scores, weights))
+    total_weight = sum(item["weight"] for item in components)
+    weighted_sum = sum(item["score"] * item["weight"] for item in components)
+    final_score = round(weighted_sum / total_weight, 2)
 
-    return round(weighted_sum / total_weight, 2)
+    return final_score, components
 
 
 def score_cibil_band(cibil: Optional[int]) -> Optional[float]:
@@ -541,7 +579,7 @@ async def score_case_eligibility(
             passed_count += 1
 
             # Calculate eligibility score
-            score = calculate_eligibility_score(borrower, lender)
+            score, score_breakdown = calculate_eligibility_score_with_breakdown(borrower, lender)
 
             # Determine probability
             probability = determine_approval_probability(score)
@@ -559,7 +597,22 @@ async def score_case_eligibility(
                 lender_name=lender.lender_name,
                 product_name=lender.product_name,
                 hard_filter_status=hard_status,
-                hard_filter_details={},
+                hard_filter_details={
+                    "score_breakdown": score_breakdown,
+                    "matched_signals": [
+                        f"Entity type: {borrower.entity_type.value if isinstance(borrower.entity_type, EntityType) else (borrower.entity_type or 'N/A')}",
+                        f"CIBIL: {borrower.cibil_score if borrower.cibil_score is not None else 'N/A'}",
+                        f"Business vintage: {borrower.business_vintage_years if borrower.business_vintage_years is not None else 'N/A'} years",
+                        f"Pincode: {borrower.pincode or 'N/A'}",
+                    ],
+                    "lender_thresholds": {
+                        "min_cibil_score": lender.min_cibil_score,
+                        "min_vintage_years": lender.min_vintage_years,
+                        "min_turnover_annual": lender.min_turnover_annual,
+                        "max_ticket_size": lender.max_ticket_size,
+                        "min_abb": lender.min_abb,
+                    },
+                },
                 eligibility_score=score,
                 approval_probability=probability,
                 expected_ticket_min=min_ticket,
@@ -997,10 +1050,50 @@ async def load_eligibility_results(case_id: UUID) -> Optional[EligibilityRespons
             )
             results.append(result)
 
+        rejection_reasons: List[str] = []
+        suggested_actions: List[str] = []
+        dynamic_recommendations: List[Dict[str, Any]] = []
+
+        # Re-compute advisory blocks on load so UI can always explain results.
+        borrower_row = await db.fetchrow(
+            """
+            SELECT
+                full_name, pan_number, aadhaar_number, dob,
+                entity_type, business_vintage_years, gstin, industry_type, pincode,
+                annual_turnover, avg_monthly_balance, monthly_credit_avg, monthly_turnover,
+                emi_outflow_monthly, bounce_count_12m, cash_deposit_ratio, itr_total_income,
+                cibil_score, active_loan_count, overdue_count, enquiry_count_6m,
+                feature_completeness
+            FROM borrower_features
+            WHERE case_id = $1
+            """,
+            case_id
+        )
+
+        if borrower_row:
+            try:
+                borrower = BorrowerFeatureVector(**dict(borrower_row))
+                failed_results = [r for r in results if r.hard_filter_status == HardFilterStatus.FAIL]
+
+                if passed_count == 0 and failed_results:
+                    rejection_reasons, suggested_actions = generate_rejection_analysis(
+                        borrower,
+                        failed_results
+                    )
+
+                dynamic_recommendations = generate_dynamic_recommendations(
+                    borrower,
+                    results
+                )
+            except Exception as e:
+                logger.warning(f"Could not recompute advisory blocks for case {case_id_str}: {e}")
+
         return EligibilityResponse(
             case_id=case_id_str,
             total_lenders_evaluated=len(results),
             lenders_passed=passed_count,
             results=results,
-            dynamic_recommendations=[]  # Will be empty for loaded results, only computed on fresh scoring
+            rejection_reasons=rejection_reasons,
+            suggested_actions=suggested_actions,
+            dynamic_recommendations=dynamic_recommendations
         )

@@ -34,11 +34,14 @@ FILENAME_PATTERNS = {
     DocumentType.GST_RETURNS: [
         r"(?i)gstr[-_]?[139]b?",  # GSTR-1, GSTR-3B, GSTR-9
         r"(?i)gst.*return",
+        r"(?i)gstr",
     ],
     DocumentType.GST_CERTIFICATE: [
         r"(?i)gst.*cert",
         r"(?i)gstin",
         r"(?i)gst.*registration",
+        # Handles generic filenames like GST.pdf
+        r"(?i)(^|[^a-z])gst([^a-z]|$)",
     ],
     DocumentType.UDYAM_SHOP_LICENSE: [
         r"(?i)udyam",

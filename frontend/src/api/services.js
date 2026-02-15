@@ -80,6 +80,26 @@ export const getReportPdf = (caseId) =>
     responseType: 'blob',
   });
 
+export const getCaseReport = (caseId) =>
+  apiClient.get(`/reports/case/${caseId}/report`);
+
+export const getWhatsAppSummary = (caseId) =>
+  apiClient.get(`/reports/case/${caseId}/report/whatsapp`, {
+    responseType: 'text',
+  });
+
+export const getNarrativeProfileReport = (caseId) =>
+  apiClient.get(`/reports/case/${caseId}/narrative/profile`);
+
+export const getNarrativeEligibilityReport = (caseId) =>
+  apiClient.get(`/reports/case/${caseId}/narrative/eligibility`);
+
+export const getNarrativeDocumentReport = (caseId) =>
+  apiClient.get(`/reports/case/${caseId}/narrative/documents`);
+
+export const getNarrativeComprehensiveReport = (caseId) =>
+  apiClient.get(`/reports/case/${caseId}/narrative/comprehensive`);
+
 // Lenders
 export const getLenders = () =>
   apiClient.get('/lenders/');

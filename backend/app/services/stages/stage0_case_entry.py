@@ -257,8 +257,8 @@ class CaseEntryService:
                 str(file_path)
             )
 
-            # Run classification if OCR succeeded
-            if ocr_result and ocr_result.text and len(ocr_result.text.strip()) > 10:
+            # Run classification if OCR produced at least some text.
+            if ocr_result and ocr_result.text and len(ocr_result.text.strip()) > 3:
                 logger.info(f"Running classification on document {document.id}")
                 # IMPROVED: Pass filename for better classification
                 classification_result = classify_document(ocr_result.text, filename=document.original_filename)
@@ -300,6 +300,14 @@ class CaseEntryService:
                         f"Document {document.id} classified from filename as {classification_result.doc_type.value} "
                         f"(confidence: {classification_result.confidence:.2f})"
                     )
+
+                    # Try GST extraction even when OCR text is short; GSTIN may still be present.
+                    from app.core.enums import DocumentType
+                    if classification_result.doc_type in [DocumentType.GST_CERTIFICATE, DocumentType.GST_RETURNS]:
+                        await self._extract_and_fetch_gst_data(
+                            document,
+                            (ocr_result.text if ocr_result and ocr_result.text else "")
+                        )
 
         except Exception as e:
             logger.error(f"Failed to run OCR/classification for document {document.id}: {e}", exc_info=True)
