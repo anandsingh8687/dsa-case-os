@@ -909,6 +909,59 @@ def extract_number_from_string(text: str) -> Optional[float]:
     return None
 
 
+def _build_default_matched_signals(
+    borrower: Optional[BorrowerFeatureVector],
+    score: Optional[float],
+) -> List[str]:
+    """Build resilient lender-match explanations when legacy rows lack details."""
+    if not borrower:
+        if score is not None:
+            return [f"Composite eligibility score: {round(float(score))}/100."]
+        return ["All hard filters satisfied for this lender profile."]
+
+    entity = borrower.entity_type.value if isinstance(borrower.entity_type, EntityType) else borrower.entity_type
+    signals = []
+    if entity:
+        signals.append(f"Entity type accepted: {entity}")
+    if borrower.cibil_score is not None:
+        signals.append(f"CIBIL within lender threshold: {borrower.cibil_score}")
+    if borrower.business_vintage_years is not None:
+        signals.append(f"Business vintage considered: {borrower.business_vintage_years} years")
+    if borrower.annual_turnover is not None:
+        signals.append(f"Annual turnover considered: ₹{borrower.annual_turnover}L")
+    if borrower.pincode:
+        signals.append(f"Pincode serviceability passed: {borrower.pincode}")
+    if score is not None:
+        signals.append(f"Composite eligibility score: {round(float(score))}/100")
+
+    return signals[:6] if signals else ["All hard filters satisfied for this lender profile."]
+
+
+def _normalize_pass_result_details(
+    result: EligibilityResult,
+    borrower: Optional[BorrowerFeatureVector] = None,
+) -> EligibilityResult:
+    """Ensure matched lenders always have explainability-safe payload keys."""
+    details = result.hard_filter_details if isinstance(result.hard_filter_details, dict) else {}
+    matched_signals = details.get("matched_signals")
+
+    if not isinstance(matched_signals, list) or len(matched_signals) == 0:
+        details["matched_signals"] = _build_default_matched_signals(
+            borrower=borrower,
+            score=result.eligibility_score,
+        )
+
+    if not isinstance(details.get("score_breakdown"), list):
+        details["score_breakdown"] = []
+    if not isinstance(details.get("lender_thresholds"), dict):
+        details["lender_thresholds"] = {}
+    if not isinstance(details.get("lender_terms"), dict):
+        details["lender_terms"] = {}
+
+    result.hard_filter_details = details
+    return result
+
+
 # ═══════════════════════════════════════════════════════════════
 # DATABASE PERSISTENCE
 # ═══════════════════════════════════════════════════════════════
@@ -1035,6 +1088,27 @@ async def load_eligibility_results(case_id: UUID) -> Optional[EligibilityRespons
         results = []
         passed_count = 0
 
+        borrower: Optional[BorrowerFeatureVector] = None
+        borrower_row = await db.fetchrow(
+            """
+            SELECT
+                full_name, pan_number, aadhaar_number, dob,
+                entity_type, business_vintage_years, gstin, industry_type, pincode,
+                annual_turnover, avg_monthly_balance, monthly_credit_avg, monthly_turnover,
+                emi_outflow_monthly, bounce_count_12m, cash_deposit_ratio, itr_total_income,
+                cibil_score, active_loan_count, overdue_count, enquiry_count_6m,
+                feature_completeness
+            FROM borrower_features
+            WHERE case_id = $1
+            """,
+            case_id
+        )
+        if borrower_row:
+            try:
+                borrower = BorrowerFeatureVector(**dict(borrower_row))
+            except Exception as e:
+                logger.warning(f"Could not load borrower vector for explainability fallback {case_id_str}: {e}")
+
         for row in rows:
             import json
 
@@ -1055,6 +1129,8 @@ async def load_eligibility_results(case_id: UUID) -> Optional[EligibilityRespons
                 missing_for_improvement=json.loads(row['missing_for_improvement']) if row['missing_for_improvement'] else [],
                 rank=row['rank']
             )
+            if hard_status == HardFilterStatus.PASS:
+                result = _normalize_pass_result_details(result, borrower=borrower)
             results.append(result)
 
         rejection_reasons: List[str] = []
@@ -1062,24 +1138,8 @@ async def load_eligibility_results(case_id: UUID) -> Optional[EligibilityRespons
         dynamic_recommendations: List[Dict[str, Any]] = []
 
         # Re-compute advisory blocks on load so UI can always explain results.
-        borrower_row = await db.fetchrow(
-            """
-            SELECT
-                full_name, pan_number, aadhaar_number, dob,
-                entity_type, business_vintage_years, gstin, industry_type, pincode,
-                annual_turnover, avg_monthly_balance, monthly_credit_avg, monthly_turnover,
-                emi_outflow_monthly, bounce_count_12m, cash_deposit_ratio, itr_total_income,
-                cibil_score, active_loan_count, overdue_count, enquiry_count_6m,
-                feature_completeness
-            FROM borrower_features
-            WHERE case_id = $1
-            """,
-            case_id
-        )
-
-        if borrower_row:
+        if borrower:
             try:
-                borrower = BorrowerFeatureVector(**dict(borrower_row))
                 failed_results = [r for r in results if r.hard_filter_status == HardFilterStatus.FAIL]
 
                 if passed_count == 0 and failed_results:

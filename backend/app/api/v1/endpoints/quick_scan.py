@@ -76,6 +76,14 @@ def _serialize_match(result: EligibilityResult) -> QuickScanMatch:
         matched_signals = details.get("matched_signals")
         if isinstance(matched_signals, list) and matched_signals:
             key_reason = str(matched_signals[1] if len(matched_signals) > 1 else matched_signals[0])
+        elif isinstance(details.get("score_breakdown"), list) and details["score_breakdown"]:
+            top_component = details["score_breakdown"][0]
+            component_label = top_component.get("label") or top_component.get("component")
+            component_score = top_component.get("score")
+            if component_label and component_score is not None:
+                key_reason = f"Strong {component_label}: {round(float(component_score))}/100"
+        elif result.eligibility_score is not None:
+            key_reason = f"Composite score {round(float(result.eligibility_score))}/100 with hard filters passed"
 
     return QuickScanMatch(
         lender_name=result.lender_name,
@@ -169,7 +177,9 @@ async def run_quick_scan(request: QuickScanRequest, current_user: CurrentUser):
         feature_completeness=78.0,
     )
 
-    eligibility = await score_case_eligibility(borrower=borrower, program_type="banking")
+    # Evaluate across the full active lender pool so quick scan is not restricted
+    # to only one program bucket.
+    eligibility = await score_case_eligibility(borrower=borrower, program_type=None)
     passed = [r for r in eligibility.results if r.hard_filter_status.value == "pass"]
     top_matches_raw = passed[:10]
     top_matches = [_serialize_match(item) for item in top_matches_raw]

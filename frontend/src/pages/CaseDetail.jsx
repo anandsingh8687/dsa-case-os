@@ -89,6 +89,36 @@ const buildRpsSchedule = (principal, annualRatePct, tenureMonths, rows = 12) => 
   return schedule;
 };
 
+const buildMatchedSignalsForModal = (selectedLender, features) => {
+  const signals = selectedLender?.hard_filter_details?.matched_signals;
+  if (Array.isArray(signals) && signals.length > 0) {
+    return signals;
+  }
+
+  const fallbacks = [];
+  const entityType = features?.entity_type || features?.entityType;
+  const cibil = features?.cibil_score ?? features?.cibilScore;
+  const vintage = features?.business_vintage_years ?? features?.businessVintageYears;
+  const turnover = features?.annual_turnover ?? features?.annualTurnover;
+  const pincode = features?.pincode;
+  const score = selectedLender?.eligibility_score;
+
+  if (entityType) fallbacks.push(`Entity type accepted: ${entityType}`);
+  if (cibil !== null && cibil !== undefined) fallbacks.push(`CIBIL considered: ${cibil}`);
+  if (vintage !== null && vintage !== undefined) {
+    fallbacks.push(`Business vintage considered: ${vintage} years`);
+  }
+  if (turnover !== null && turnover !== undefined) {
+    fallbacks.push(`Annual turnover considered: ₹${turnover}L`);
+  }
+  if (pincode) fallbacks.push(`Pincode serviceability passed: ${pincode}`);
+  if (score !== null && score !== undefined) {
+    fallbacks.push(`Composite eligibility score: ${Math.round(score)}/100`);
+  }
+
+  return fallbacks.length > 0 ? fallbacks : ['Hard filters passed for this lender profile.'];
+};
+
 const CaseDetail = () => {
   const { caseId } = useParams();
   const queryClient = useQueryClient();
@@ -223,6 +253,7 @@ const CaseDetail = () => {
   const selectedEmailLender = matchingEligibilityResults.find(
     (item) => `${item.lender_name}::${item.product_name}` === emailLenderKey
   ) || null;
+  const selectedLenderSignals = buildMatchedSignalsForModal(selectedLender, features);
 
   const runFullPipelineMutation = useMutation({
     mutationFn: async () => {
@@ -1335,7 +1366,7 @@ const CaseDetail = () => {
                 <div className="rounded-lg border border-green-200 bg-green-50 p-3">
                   <h4 className="font-semibold text-green-900 mb-1">Why this lender matched</h4>
                   <ul className="text-sm text-green-900 space-y-1">
-                    {(selectedLender?.hard_filter_details?.matched_signals || []).map((signal, idx) => (
+                    {selectedLenderSignals.map((signal, idx) => (
                       <li key={`signal-${idx}`}>• {signal}</li>
                     ))}
                   </ul>
