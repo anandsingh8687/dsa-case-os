@@ -1,10 +1,14 @@
 import React, { useMemo, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Search, ArrowRight, Download } from 'lucide-react';
 
-import { runQuickScan, getQuickScanCard } from '../api/services';
+import {
+  runQuickScan,
+  getQuickScanCard,
+  getQuickScanKnowledgeBaseStats,
+} from '../api/services';
 import { Button, Card, Loading, Badge } from '../components/ui';
 import { formatCurrency } from '../utils/format';
 
@@ -21,6 +25,12 @@ const QuickScan = () => {
   const navigate = useNavigate();
   const [form, setForm] = useState(defaultForm);
   const [scanResult, setScanResult] = useState(null);
+
+  const { data: kbStatsData } = useQuery({
+    queryKey: ['quick-scan-kb-stats'],
+    queryFn: getQuickScanKnowledgeBaseStats,
+    staleTime: 1000 * 60 * 15,
+  });
 
   const quickScanMutation = useMutation({
     mutationFn: runQuickScan,
@@ -52,10 +62,19 @@ const QuickScan = () => {
   });
 
   const matchedCount = scanResult?.matches_found || 0;
+  const isBusinessLoan = form.loan_type === 'BL';
+  const monthlyFieldLabel = isBusinessLoan ? 'Monthly Turnover (Lakhs)' : 'Monthly Income (INR)';
+  const profileFieldLabel = isBusinessLoan ? 'Entity Type' : 'Applicant Type';
+  const vintageFieldLabel = isBusinessLoan ? 'Business Vintage (Years)' : 'Work/Business Experience (Years)';
+
   const topTicket = useMemo(() => {
     if (!scanResult?.top_matches?.length) return null;
     return Math.max(...scanResult.top_matches.map((m) => Number(m.expected_ticket_max || 0)));
   }, [scanResult]);
+
+  const kbStats = kbStatsData?.data;
+  const plCount = kbStats?.by_loan_type?.PL || 0;
+  const hlCount = kbStats?.by_loan_type?.HL || 0;
 
   const onSubmit = (event) => {
     event.preventDefault();
@@ -79,8 +98,8 @@ const QuickScan = () => {
       state: {
         quickScanPrefill: {
           borrower_name: 'Quick Scan Prospect',
-          entity_type: form.entity_type_or_employer,
-          program_type: 'banking',
+          entity_type: isBusinessLoan ? form.entity_type_or_employer : 'proprietorship',
+          program_type: form.loan_type === 'PL' ? 'income' : form.loan_type === 'HL' ? 'hybrid' : 'banking',
           pincode: form.pincode,
           loan_amount_requested: topTicket || null,
         },
@@ -94,18 +113,33 @@ const QuickScan = () => {
       <Card>
         <h1 className="text-2xl font-bold text-gray-900 mb-2">Instant Eligibility Quick Scan</h1>
         <p className="text-sm text-gray-600 mb-6">
-          Run a 30-second BL eligibility snapshot before creating a full case.
+          Run a 30-second BL/PL/HL eligibility snapshot before creating a full case.
         </p>
+        {kbStats && (
+          <div className="mb-6 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-900">
+            PL/HL policy knowledge base loaded: {kbStats.total} rows
+            {' '}({plCount} PL, {hlCount} HL).
+          </div>
+        )}
 
         <form onSubmit={onSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Loan Type</label>
             <select
               value={form.loan_type}
-              onChange={(e) => setForm((prev) => ({ ...prev, loan_type: e.target.value }))}
+              onChange={(e) =>
+                setForm((prev) => ({
+                  ...prev,
+                  loan_type: e.target.value,
+                  monthly_income_or_turnover: e.target.value === 'BL' ? 12 : 50000,
+                  entity_type_or_employer: e.target.value === 'BL' ? 'proprietorship' : 'self_employed',
+                }))
+              }
               className="w-full border border-gray-300 rounded-lg px-3 py-2"
             >
               <option value="BL">Business Loan (BL)</option>
+              <option value="PL">Personal Loan (PL)</option>
+              <option value="HL">Home Loan (HL)</option>
             </select>
           </div>
 
@@ -123,20 +157,25 @@ const QuickScan = () => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Monthly Turnover (Lakhs)</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">{monthlyFieldLabel}</label>
             <input
               type="number"
               min="0"
-              step="0.1"
+              step={isBusinessLoan ? '0.1' : '1000'}
               value={form.monthly_income_or_turnover}
               onChange={(e) => setForm((prev) => ({ ...prev, monthly_income_or_turnover: e.target.value }))}
               className="w-full border border-gray-300 rounded-lg px-3 py-2"
               required
             />
+            <p className="text-xs text-gray-500 mt-1">
+              {isBusinessLoan
+                ? 'Use monthly turnover in Lakhs (example: 12 = ₹12L/month).'
+                : 'Use monthly net income in INR (example: 50000).'}
+            </p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Business Vintage (Years)</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">{vintageFieldLabel}</label>
             <input
               type="number"
               min="0"
@@ -149,16 +188,25 @@ const QuickScan = () => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Entity Type</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">{profileFieldLabel}</label>
             <select
               value={form.entity_type_or_employer}
               onChange={(e) => setForm((prev) => ({ ...prev, entity_type_or_employer: e.target.value }))}
               className="w-full border border-gray-300 rounded-lg px-3 py-2"
             >
-              <option value="proprietorship">Proprietorship</option>
-              <option value="partnership">Partnership</option>
-              <option value="llp">LLP</option>
-              <option value="pvt_ltd">Private Limited</option>
+              {isBusinessLoan ? (
+                <>
+                  <option value="proprietorship">Proprietorship</option>
+                  <option value="partnership">Partnership</option>
+                  <option value="llp">LLP</option>
+                  <option value="pvt_ltd">Private Limited</option>
+                </>
+              ) : (
+                <>
+                  <option value="salaried">Salaried</option>
+                  <option value="self_employed">Self-employed</option>
+                </>
+              )}
             </select>
           </div>
 

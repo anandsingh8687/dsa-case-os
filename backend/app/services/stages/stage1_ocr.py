@@ -5,6 +5,8 @@ import logging
 import time
 from pathlib import Path
 from typing import Tuple
+import os
+import re
 import fitz  # PyMuPDF
 import pytesseract
 from PIL import Image, ImageEnhance
@@ -74,6 +76,12 @@ class OCRService:
         doc = None
         try:
             doc = fitz.open(file_path)
+            if doc.is_encrypted:
+                unlocked = self._unlock_pdf(doc, file_path=file_path)
+                if not unlocked:
+                    raise ValueError(
+                        "PDF is password-protected and could not be unlocked with configured candidates"
+                    )
             page_count = len(doc)
 
             if page_count == 0:
@@ -110,6 +118,64 @@ class OCRService:
         finally:
             if doc:
                 doc.close()
+
+    def _unlock_pdf(self, doc: fitz.Document, file_path: str) -> bool:
+        """Try common password candidates for encrypted PDFs."""
+        candidates = self._build_pdf_password_candidates(file_path)
+
+        for candidate in candidates:
+            try:
+                if doc.authenticate(candidate):
+                    logger.info(
+                        "Unlocked encrypted PDF using candidate derived from filename/config"
+                    )
+                    return True
+            except Exception:
+                continue
+
+        logger.warning("Failed to unlock encrypted PDF %s using %d candidates", file_path, len(candidates))
+        return False
+
+    def _build_pdf_password_candidates(self, file_path: str) -> list[str]:
+        stem = Path(file_path).stem
+        stem_clean = re.sub(r"[^A-Za-z0-9]", "", stem)
+        tokens = [tok for tok in re.split(r"[^A-Za-z0-9]+", stem) if tok]
+
+        candidates = [
+            stem,
+            stem.upper(),
+            stem.lower(),
+            stem.title(),
+            stem_clean,
+            stem_clean.upper(),
+            stem_clean.lower(),
+        ]
+
+        if tokens:
+            joined = "".join(tokens)
+            candidates.extend([
+                joined,
+                joined.upper(),
+                joined.lower(),
+                "".join(tok.upper() for tok in tokens),
+            ])
+
+        # Add explicit environment candidates for known protected formats.
+        if settings.PDF_PASSWORD_CANDIDATES:
+            extra = [item.strip() for item in settings.PDF_PASSWORD_CANDIDATES.split(",") if item.strip()]
+            candidates.extend(extra)
+
+        # Preserve order while deduplicating.
+        unique = []
+        seen = set()
+        for cand in candidates:
+            if not cand:
+                continue
+            if cand in seen:
+                continue
+            seen.add(cand)
+            unique.append(cand)
+        return unique
 
     def _extract_with_pymupdf(self, doc: fitz.Document) -> Tuple[str, bool]:
         """

@@ -13,7 +13,7 @@ from app.db.database import init_db, close_db
 from app.api.v1.endpoints import (
     auth, cases, documents, extraction,
     eligibility, reports, copilot, lenders, whatsapp, share, pincodes,
-    flexible_case, batch_upload, bank_statement, admin, quick_scan, commission
+    flexible_case, batch_upload, bank_statement, admin, quick_scan, commission, leads, submissions
 )
 
 logger = logging.getLogger(__name__)
@@ -114,6 +114,8 @@ app.include_router(bank_statement.router, prefix=settings.API_PREFIX, tags=["Ban
 app.include_router(admin.router,       prefix=settings.API_PREFIX, tags=["Admin"])
 app.include_router(quick_scan.router,  prefix=settings.API_PREFIX, tags=["Quick Scan"])
 app.include_router(commission.router,  prefix=settings.API_PREFIX, tags=["Commission"])
+app.include_router(leads.router,       prefix=settings.API_PREFIX, tags=["Leads"])
+app.include_router(submissions.router, prefix=settings.API_PREFIX, tags=["Submissions"])
 
 
 # ─── Static Frontend ─────────────────────────────────────────

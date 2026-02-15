@@ -18,6 +18,8 @@ from . import (
     admin,
     quick_scan,
     commission,
+    leads,
+    submissions,
 )
 
 __all__ = [
@@ -38,4 +40,6 @@ __all__ = [
     "admin",
     "quick_scan",
     "commission",
+    "leads",
+    "submissions",
 ]

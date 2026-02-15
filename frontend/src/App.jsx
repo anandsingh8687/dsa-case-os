@@ -21,6 +21,8 @@ import QuickScan from './pages/QuickScan';
 import AdminPanel from './pages/AdminPanel';
 import BankStatement from './pages/BankStatement';
 import Commission from './pages/Commission';
+import Leads from './pages/Leads';
+import Submissions from './pages/Submissions';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -182,6 +184,26 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <Commission />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/leads"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <Leads />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/submissions"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <Submissions />
                 </Layout>
               </ProtectedRoute>
             }

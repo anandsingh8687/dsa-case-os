@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from app.schemas.shared import ExtractedFieldItem
 from app.core.enums import DocumentType
+from app.services.cibil_report_parser import get_cibil_report_parser
 
 logger = logging.getLogger(__name__)
 
@@ -331,59 +332,56 @@ class FieldExtractor:
 
     def _extract_cibil_report(self, ocr_text: str) -> List[ExtractedFieldItem]:
         """Extract fields from CIBIL report."""
-        fields = []
+        fields: List[ExtractedFieldItem] = []
+        parser = get_cibil_report_parser()
+        parsed = parser.parse(ocr_text)
 
-        # Credit score: 3-digit number (300-900)
-        score_patterns = [
-            r'(?:Score|CIBIL Score|Credit Score)\s*[:\-]?\s*(\d{3})',
-            r'\b([3-9]\d{2})\b'  # Fallback: any 3-digit number in range
-        ]
-        for pattern in score_patterns:
-            match = re.search(pattern, ocr_text, re.IGNORECASE)
-            if match:
-                score = int(match.group(1))
-                if 300 <= score <= 900:
-                    fields.append(ExtractedFieldItem(
-                        field_name="cibil_score",
-                        field_value=str(score),
-                        confidence=0.85,
-                        source="extraction"
-                    ))
-                    break
+        if parsed.get("cibil_score") is not None:
+            fields.append(ExtractedFieldItem(
+                field_name="cibil_score",
+                field_value=str(int(parsed["cibil_score"])),
+                confidence=0.9,
+                source="extraction"
+            ))
 
-        # Active loans count
-        active_loan_pattern = r'(?:Active Accounts|Active Loans)\s*[:\-]?\s*(\d+)'
-        active_match = re.search(active_loan_pattern, ocr_text, re.IGNORECASE)
-        if active_match:
-            count = active_match.group(1)
+        if parsed.get("active_loan_count") is not None:
             fields.append(ExtractedFieldItem(
                 field_name="active_loan_count",
-                field_value=count,
-                confidence=0.75,
+                field_value=str(int(parsed["active_loan_count"])),
+                confidence=0.8,
                 source="extraction"
             ))
 
-        # Overdue accounts
-        overdue_pattern = r'(?:Overdue|Delinquent|DPD)\s*[:\-]?\s*(\d+)'
-        overdue_match = re.search(overdue_pattern, ocr_text, re.IGNORECASE)
-        if overdue_match:
-            count = overdue_match.group(1)
+        if parsed.get("overdue_count") is not None:
             fields.append(ExtractedFieldItem(
                 field_name="overdue_count",
-                field_value=count,
-                confidence=0.75,
+                field_value=str(int(parsed["overdue_count"])),
+                confidence=0.8,
                 source="extraction"
             ))
 
-        # Enquiry count
-        enquiry_pattern = r'(?:Enquiry|Enquiries|Credit Enquiries|Recent Enquiries)\s*[:\-]?\s*(\d+)'
-        enquiry_match = re.search(enquiry_pattern, ocr_text, re.IGNORECASE)
-        if enquiry_match:
-            count = enquiry_match.group(1)
+        if parsed.get("enquiry_count_6m") is not None:
             fields.append(ExtractedFieldItem(
                 field_name="enquiry_count_6m",
-                field_value=count,
+                field_value=str(int(parsed["enquiry_count_6m"])),
+                confidence=0.78,
+                source="extraction"
+            ))
+
+        # Keep additional meta fields for UI/debug even if they don't map to borrower vector yet.
+        if parsed.get("cibil_report_date"):
+            fields.append(ExtractedFieldItem(
+                field_name="cibil_report_date",
+                field_value=str(parsed["cibil_report_date"]),
                 confidence=0.7,
+                source="extraction"
+            ))
+
+        if parsed.get("total_current_outstanding") is not None:
+            fields.append(ExtractedFieldItem(
+                field_name="total_current_outstanding",
+                field_value=str(parsed["total_current_outstanding"]),
+                confidence=0.72,
                 source="extraction"
             ))
 

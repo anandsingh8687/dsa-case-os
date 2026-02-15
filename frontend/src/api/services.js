@@ -113,6 +113,9 @@ export const getQuickScan = (scanId) =>
 export const getQuickScanCard = (scanId) =>
   apiClient.get(`/quick-scan/${scanId}/card`, { responseType: 'blob' });
 
+export const getQuickScanKnowledgeBaseStats = () =>
+  apiClient.get('/quick-scan/knowledge-base/stats');
+
 // Admin
 export const getAdminStats = () =>
   apiClient.get('/admin/stats');
@@ -150,6 +153,41 @@ export const upsertCommissionPayout = (payload) =>
 
 export const getCommissionPayouts = (params) =>
   apiClient.get('/commission/payouts', { params });
+
+// Leads
+export const getLeads = (params) =>
+  apiClient.get('/leads', { params });
+
+export const createLead = (payload) =>
+  apiClient.post('/leads', payload);
+
+export const updateLead = (leadId, payload) =>
+  apiClient.patch(`/leads/${leadId}`, payload);
+
+export const getLeadActivities = (leadId) =>
+  apiClient.get(`/leads/${leadId}/activities`);
+
+export const addLeadActivity = (leadId, payload) =>
+  apiClient.post(`/leads/${leadId}/activities`, payload);
+
+// Submission Tracker
+export const getSubmissions = (params) =>
+  apiClient.get('/submissions', { params });
+
+export const getCaseSubmissions = (caseId) =>
+  apiClient.get(`/submissions/case/${caseId}`);
+
+export const createCaseSubmission = (caseId, payload) =>
+  apiClient.post(`/submissions/case/${caseId}`, payload);
+
+export const updateSubmission = (submissionId, payload) =>
+  apiClient.patch(`/submissions/${submissionId}`, payload);
+
+export const addSubmissionQuery = (submissionId, payload) =>
+  apiClient.post(`/submissions/${submissionId}/queries`, payload);
+
+export const updateSubmissionQuery = (queryId, payload) =>
+  apiClient.patch(`/submissions/queries/${queryId}`, payload);
 
 // Bank Statement Analyzer
 export const processBankStatements = (formData) =>

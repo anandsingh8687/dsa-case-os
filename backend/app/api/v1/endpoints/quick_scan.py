@@ -18,6 +18,7 @@ from app.core.deps import CurrentUser
 from app.schemas.shared import BorrowerFeatureVector, EligibilityResult
 from app.services.stages.stage4_eligibility import score_case_eligibility
 from app.db.database import get_db_session
+from app.services.multi_loan_policy_service import get_multi_loan_policy_service
 
 
 router = APIRouter(prefix="/quick-scan", tags=["quick_scan"])
@@ -99,7 +100,7 @@ def _serialize_match(result: EligibilityResult) -> QuickScanMatch:
 async def _generate_pitch_summary(payload: Dict[str, Any]) -> str:
     """Generate a short 2-line DSA pitch with LLM fallback to deterministic text."""
     fallback = (
-        f"Based on this profile, {payload['matches_found']} lenders are immediately matchable for Business Loan. "
+        f"Based on this profile, {payload['matches_found']} lenders are immediately matchable for {payload['loan_label']}. "
         f"Top ticket potential is up to {payload['top_ticket_label']} with strongest fit in {payload['top_lenders_label']}."
     )
 
@@ -121,7 +122,7 @@ async def _generate_pitch_summary(payload: Dict[str, Any]) -> str:
                     "role": "user",
                     "content": (
                         "Generate a 2-line pitch for this quick scan: "
-                        f"CIBIL {payload['cibil_score']}, monthly turnover ₹{payload['monthly_turnover_rupees']:,}, "
+                        f"Loan type {payload['loan_label']}, CIBIL {payload['cibil_score']}, monthly input ₹{payload['monthly_turnover_rupees']:,}, "
                         f"vintage {payload['vintage_years']} years, pincode {payload['pincode']}, "
                         f"matches {payload['matches_found']} lenders, top lenders {payload['top_lenders_label']}, "
                         f"max ticket approx {payload['top_ticket_label']}."
@@ -153,36 +154,102 @@ def _decode_scan_data(raw_value: Any) -> Dict[str, Any]:
 
 @router.post("", response_model=QuickScanResponse)
 async def run_quick_scan(request: QuickScanRequest, current_user: CurrentUser):
-    """Run instant BL quick scan against current lender rule base."""
-    if request.loan_type != "BL":
-        raise HTTPException(
-            status_code=400,
-            detail="Quick Scan currently supports BL. PL/HL/LAP will be enabled after multi-loan knowledge base import.",
-        )
-
+    """Run instant BL/PL/HL quick scan against available lender rules."""
     if not request.pincode.isdigit():
         raise HTTPException(status_code=400, detail="Pincode must be a 6-digit numeric value")
+    loan_label = {
+        "BL": "Business Loan",
+        "PL": "Personal Loan",
+        "HL": "Home Loan",
+        "LAP": "Loan Against Property",
+    }.get(request.loan_type, request.loan_type)
 
-    monthly_turnover_lakhs = float(request.monthly_income_or_turnover)
-    annual_turnover_lakhs = round(monthly_turnover_lakhs * 12.0, 2)
+    eligibility = None
+    insights: Dict[str, Any] = {}
+    top_matches: List[QuickScanMatch] = []
+    total_evaluated = 0
 
-    borrower = BorrowerFeatureVector(
-        entity_type=_infer_entity(request.entity_type_or_employer),
-        business_vintage_years=request.vintage_or_experience,
-        pincode=request.pincode,
-        cibil_score=request.cibil_score,
-        annual_turnover=annual_turnover_lakhs,
-        monthly_turnover=round(monthly_turnover_lakhs * 100000, 2),
-        monthly_credit_avg=round(monthly_turnover_lakhs * 100000, 2),
-        feature_completeness=78.0,
-    )
+    if request.loan_type == "BL":
+        monthly_turnover_lakhs = float(request.monthly_income_or_turnover)
+        annual_turnover_lakhs = round(monthly_turnover_lakhs * 12.0, 2)
 
-    # Evaluate across the full active lender pool so quick scan is not restricted
-    # to only one program bucket.
-    eligibility = await score_case_eligibility(borrower=borrower, program_type=None)
-    passed = [r for r in eligibility.results if r.hard_filter_status.value == "pass"]
-    top_matches_raw = passed[:10]
-    top_matches = [_serialize_match(item) for item in top_matches_raw]
+        borrower = BorrowerFeatureVector(
+            entity_type=_infer_entity(request.entity_type_or_employer),
+            business_vintage_years=request.vintage_or_experience,
+            pincode=request.pincode,
+            cibil_score=request.cibil_score,
+            annual_turnover=annual_turnover_lakhs,
+            monthly_turnover=round(monthly_turnover_lakhs * 100000, 2),
+            monthly_credit_avg=round(monthly_turnover_lakhs * 100000, 2),
+            feature_completeness=78.0,
+        )
+
+        # Evaluate across the full active lender pool so quick scan is not restricted
+        # to only one program bucket.
+        eligibility = await score_case_eligibility(borrower=borrower, program_type=None)
+        passed = [r for r in eligibility.results if r.hard_filter_status.value == "pass"]
+        top_matches_raw = passed[:10]
+        top_matches = [_serialize_match(item) for item in top_matches_raw]
+        total_evaluated = eligibility.total_lenders_evaluated
+
+        avg_score = round(sum((m.score for m in top_matches), 2) / len(top_matches), 2) if top_matches else 0.0
+        median_score = round(median([m.score for m in top_matches]), 2) if top_matches else 0.0
+
+        insights = {
+            "avg_score": avg_score,
+            "median_score": median_score,
+            "rejection_reasons": eligibility.rejection_reasons,
+            "suggested_actions": eligibility.suggested_actions,
+            "dynamic_recommendations": eligibility.dynamic_recommendations[:3],
+            "assumptions": {
+                "turnover_unit": "input interpreted as monthly turnover in Lakhs",
+                "loan_type_scope": "business_loan_only",
+            },
+        }
+    elif request.loan_type in {"PL", "HL"}:
+        policy_service = get_multi_loan_policy_service()
+        result = policy_service.evaluate(
+            loan_type=request.loan_type,
+            cibil_score=request.cibil_score,
+            monthly_income_or_turnover=float(request.monthly_income_or_turnover),
+            vintage_or_experience=float(request.vintage_or_experience),
+            entity_type_or_employer=request.entity_type_or_employer,
+        )
+
+        total_evaluated = int(result.get("total_evaluated") or 0)
+        raw_matches = result.get("matches") or []
+        top_matches = [
+            QuickScanMatch(
+                lender_name=item.get("lender_name", "Unknown Lender"),
+                product_name=item.get("product_name", loan_label),
+                score=float(item.get("score") or 0.0),
+                probability=item.get("probability"),
+                expected_ticket_min=item.get("expected_ticket_min"),
+                expected_ticket_max=item.get("expected_ticket_max"),
+                key_reason=item.get("key_reason"),
+            )
+            for item in raw_matches[:10]
+        ]
+
+        avg_score = round(sum((m.score for m in top_matches), 2) / len(top_matches), 2) if top_matches else 0.0
+        median_score = round(median([m.score for m in top_matches]), 2) if top_matches else 0.0
+        insights = {
+            "avg_score": avg_score,
+            "median_score": median_score,
+            "rejection_reasons": result.get("rejection_reasons", []),
+            "suggested_actions": result.get("suggested_actions", []),
+            "dynamic_recommendations": [],
+            "assumptions": {
+                "income_unit": "PL/HL input interpreted as monthly income in INR (values <1000 treated as Lakhs)",
+                "knowledge_base": "multi_loan_policy_2026.json",
+                "applicant_type": result.get("applicant_type"),
+            },
+        }
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Quick Scan does not support {request.loan_type} yet.",
+        )
 
     top_ticket = max(
         (m.expected_ticket_max or 0 for m in top_matches),
@@ -192,9 +259,16 @@ async def run_quick_scan(request: QuickScanRequest, current_user: CurrentUser):
     top_lenders_label = ", ".join([m.lender_name for m in top_matches[:3]]) if top_matches else "none yet"
 
     payload = {
+        "loan_label": loan_label,
         "matches_found": len(top_matches),
         "cibil_score": request.cibil_score,
-        "monthly_turnover_rupees": int(monthly_turnover_lakhs * 100000),
+        "monthly_turnover_rupees": (
+            int(float(request.monthly_income_or_turnover) * 100000)
+            if request.loan_type == "BL"
+            else int(float(request.monthly_income_or_turnover) * 100000)
+            if float(request.monthly_income_or_turnover) < 1000
+            else int(float(request.monthly_income_or_turnover))
+        ),
         "vintage_years": request.vintage_or_experience,
         "pincode": request.pincode,
         "top_lenders_label": top_lenders_label,
@@ -202,32 +276,17 @@ async def run_quick_scan(request: QuickScanRequest, current_user: CurrentUser):
     }
     pitch = await _generate_pitch_summary(payload)
 
-    avg_score = round(sum((m.score for m in top_matches), 2) / len(top_matches), 2) if top_matches else 0.0
-    median_score = round(median([m.score for m in top_matches]), 2) if top_matches else 0.0
-
-    insights = {
-        "avg_score": avg_score,
-        "median_score": median_score,
-        "rejection_reasons": eligibility.rejection_reasons,
-        "suggested_actions": eligibility.suggested_actions,
-        "dynamic_recommendations": eligibility.dynamic_recommendations[:3],
-        "assumptions": {
-            "turnover_unit": "input interpreted as monthly turnover in Lakhs",
-            "loan_type_scope": "business_loan_only",
-        },
-    }
-
     scan_record = {
         "request": request.model_dump(),
         "response": {
             "loan_type": request.loan_type,
             "matches_found": len(top_matches),
-            "total_evaluated": eligibility.total_lenders_evaluated,
+            "total_evaluated": total_evaluated,
             "top_matches": [m.model_dump() for m in top_matches],
             "summary_pitch": pitch,
             "insights": insights,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
         },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     async with get_db_session() as db:
@@ -247,11 +306,18 @@ async def run_quick_scan(request: QuickScanRequest, current_user: CurrentUser):
         scan_id=scan_id,
         loan_type=request.loan_type,
         matches_found=len(top_matches),
-        total_evaluated=eligibility.total_lenders_evaluated,
+        total_evaluated=total_evaluated,
         top_matches=top_matches,
         summary_pitch=pitch,
         insights=insights,
     )
+
+
+@router.get("/knowledge-base/stats")
+async def get_quick_scan_knowledge_base_stats(current_user: CurrentUser):
+    """Expose quick-scan PL/HL dataset coverage for admin and smoke checks."""
+    policy_service = get_multi_loan_policy_service()
+    return policy_service.stats()
 
 
 @router.get("/{scan_id}", response_model=QuickScanResponse)

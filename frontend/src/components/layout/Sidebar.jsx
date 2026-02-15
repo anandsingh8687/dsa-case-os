@@ -10,6 +10,8 @@ import {
   Shield,
   FileSpreadsheet,
   Percent,
+  Users,
+  Send,
 } from 'lucide-react';
 import { getUser } from '../../utils/auth';
 
@@ -24,6 +26,8 @@ const Sidebar = () => {
     { to: '/copilot', icon: MessageSquare, label: 'Copilot' },
     { to: '/bank-statement', icon: FileSpreadsheet, label: 'Bank Statement' },
     { to: '/commission', icon: Percent, label: 'Commission' },
+    { to: '/leads', icon: Users, label: 'Leads' },
+    { to: '/submissions', icon: Send, label: 'Submissions' },
     { to: '/pincode-checker', icon: MapPin, label: 'Pincode Checker' },
     { to: '/settings', icon: Settings, label: 'Settings' },
     ...(isAdmin ? [{ to: '/admin', icon: Shield, label: 'Admin' }] : []),

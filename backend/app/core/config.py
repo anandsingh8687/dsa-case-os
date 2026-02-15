@@ -54,6 +54,7 @@ class Settings(BaseSettings):
 
     # OCR
     TESSERACT_CMD: str = "tesseract"
+    PDF_PASSWORD_CANDIDATES: Optional[str] = os.getenv("PDF_PASSWORD_CANDIDATES", "")
 
     # Kimi 2.5 API (Moonshot AI - for Copilot)
     LLM_API_KEY: Optional[str] = None
