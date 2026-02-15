@@ -818,33 +818,6 @@ const CaseDetail = () => {
                   </div>
                 )}
 
-                {/* Dynamic Recommendations */}
-                {Array.isArray(eligibility.dynamic_recommendations) && eligibility.dynamic_recommendations.length > 0 && (
-                  <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-6">
-                    <h4 className="font-semibold text-blue-900 mb-3">Top Improvement Recommendations</h4>
-                    {Array.isArray(eligibilityExplain?.top_actions) && eligibilityExplain.top_actions.length > 0 && (
-                      <ul className="mb-4 text-sm text-blue-900 space-y-1">
-                        {eligibilityExplain.top_actions.slice(0, 3).map((action, idx) => (
-                          <li key={`top-action-${idx}`}>• {action}</li>
-                        ))}
-                      </ul>
-                    )}
-                    <div className="space-y-2 text-sm">
-                      {eligibility.dynamic_recommendations.slice(0, 4).map((rec, idx) => (
-                        <div key={`rec-${idx}`} className="bg-white border border-blue-100 rounded-md p-3">
-                          <div className="font-medium text-blue-900">{rec.title || rec.recommendation || 'Recommendation'}</div>
-                          {rec.impact && (
-                            <div className="text-blue-700 mt-1">Impact: {rec.impact}</div>
-                          )}
-                          {rec.detail && (
-                            <div className="text-gray-600 mt-1">{rec.detail}</div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
                 <div className={`mb-4 text-sm ${
                   eligibility.lenders_passed === 0 ? 'text-red-600 font-medium' : 'text-gray-600'
                 }`}>
@@ -1074,6 +1047,56 @@ const CaseDetail = () => {
                     Click any lender row to view complete acceptance/rejection logic.
                   </p>
                 </div>
+
+                {/* Dynamic Recommendations - moved to end per UX request */}
+                {Array.isArray(eligibility.dynamic_recommendations) && eligibility.dynamic_recommendations.length > 0 && (
+                  <div className="mt-8 bg-blue-50 border border-blue-200 rounded-lg p-6">
+                    <h4 className="font-semibold text-blue-900 mb-3">Top Improvement Recommendations</h4>
+                    <div className="space-y-3 text-sm">
+                      {eligibility.dynamic_recommendations.slice(0, 5).map((rec, idx) => {
+                        const title = rec.issue || rec.title || rec.action || null;
+                        const action = rec.action || rec.detail || null;
+                        const impact = rec.impact || null;
+                        const current = rec.current || null;
+                        const target = rec.target || null;
+                        const lendersAffected = Array.isArray(rec.lenders_affected) ? rec.lenders_affected : [];
+
+                        return (
+                          <div key={`rec-end-${idx}`} className="bg-white border border-blue-100 rounded-md p-4">
+                            {title && <div className="font-semibold text-blue-900">{title}</div>}
+                            {action && <div className="text-gray-700 mt-1">{action}</div>}
+                            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                              {impact && <div className="text-blue-700">Impact: {impact}</div>}
+                              {(current || target) && (
+                                <div className="text-gray-600">
+                                  {current ? `Current: ${current}` : ''}
+                                  {current && target ? ' | ' : ''}
+                                  {target ? `Target: ${target}` : ''}
+                                </div>
+                              )}
+                            </div>
+                            {lendersAffected.length > 0 && (
+                              <div className="text-xs text-gray-500 mt-2">
+                                Affects: {lendersAffected.slice(0, 5).join(', ')}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {Array.isArray(eligibilityExplain?.top_actions) && eligibilityExplain.top_actions.length > 0 && (
+                      <div className="mt-4 pt-4 border-t border-blue-100">
+                        <h5 className="font-medium text-blue-900 mb-2">Immediate Actions</h5>
+                        <ul className="space-y-1 text-sm text-blue-900">
+                          {eligibilityExplain.top_actions.slice(0, 4).map((action, idx) => (
+                            <li key={`top-action-end-${idx}`}>• {action}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
             ) : (
               <p className="text-gray-500 text-center py-8">

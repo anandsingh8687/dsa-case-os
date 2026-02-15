@@ -19,6 +19,7 @@ import Settings from './pages/Settings';
 import PincodeChecker from './pages/PincodeChecker';
 import QuickScan from './pages/QuickScan';
 import AdminPanel from './pages/AdminPanel';
+import BankStatement from './pages/BankStatement';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -140,6 +141,16 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <QuickScan />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/bank-statement"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <BankStatement />
                 </Layout>
               </ProtectedRoute>
             }

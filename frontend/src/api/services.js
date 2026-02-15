@@ -129,6 +129,13 @@ export const getAdminLogs = (params) =>
 export const getAdminHealth = () =>
   apiClient.get('/admin/health');
 
+// Bank Statement Analyzer
+export const processBankStatements = (formData) =>
+  apiClient.post('/bank-statement/process', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    responseType: 'blob',
+  });
+
 // Lenders
 export const getLenders = () =>
   apiClient.get('/lenders/');
