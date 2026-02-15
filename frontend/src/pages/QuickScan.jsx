@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Search, ArrowRight, Download } from 'lucide-react';
 
-import { runQuickScan, createCase, getQuickScanCard } from '../api/services';
+import { runQuickScan, getQuickScanCard } from '../api/services';
 import { Button, Card, Loading, Badge } from '../components/ui';
 import { formatCurrency } from '../utils/format';
 
@@ -30,23 +30,6 @@ const QuickScan = () => {
     },
     onError: (error) => {
       toast.error(error.response?.data?.detail || 'Quick scan failed');
-    },
-  });
-
-  const createCaseMutation = useMutation({
-    mutationFn: createCase,
-    onSuccess: (response) => {
-      const caseId = response?.data?.case_id;
-      if (!caseId) {
-        toast.success('Case created.');
-        navigate('/cases/new');
-        return;
-      }
-      toast.success(`Converted to full case: ${caseId}`);
-      navigate(`/cases/${caseId}`);
-    },
-    onError: (error) => {
-      toast.error(error.response?.data?.detail || 'Failed to create full case');
     },
   });
 
@@ -92,13 +75,18 @@ const QuickScan = () => {
   };
 
   const convertToCase = () => {
-    createCaseMutation.mutate({
-      borrower_name: 'Quick Scan Prospect',
-      entity_type: form.entity_type_or_employer,
-      program_type: 'banking',
-      pincode: form.pincode,
-      loan_amount_requested: topTicket || null,
+    navigate('/cases/new', {
+      state: {
+        quickScanPrefill: {
+          borrower_name: 'Quick Scan Prospect',
+          entity_type: form.entity_type_or_employer,
+          program_type: 'banking',
+          pincode: form.pincode,
+          loan_amount_requested: topTicket || null,
+        },
+      },
     });
+    toast.success('Opening full case workflow. Upload documents to continue.');
   };
 
   return (
@@ -228,7 +216,6 @@ const QuickScan = () => {
               <div className="flex gap-2">
                 <Button
                   onClick={convertToCase}
-                  disabled={createCaseMutation.isPending}
                   className="flex items-center gap-2"
                 >
                   Convert to Full Case

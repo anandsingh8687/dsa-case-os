@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { useDropzone } from 'react-dropzone';
 import { useMutation } from '@tanstack/react-query';
@@ -49,6 +49,7 @@ const toCasePayload = (data) => {
 
 const NewCase = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [step, setStep] = useState(0); // Start at step 0 for mode selection
   const [workflowMode, setWorkflowMode] = useState(null); // 'form-first' or 'docs-first'
   const [caseId, setCaseId] = useState(null);
@@ -64,6 +65,8 @@ const NewCase = () => {
     formState: { errors },
     setValue,
   } = useForm();
+
+  const quickScanPrefill = location.state?.quickScanPrefill || null;
 
   const updateCaseMutation = useMutation({
     mutationFn: ({ caseId: currentCaseId, data }) => updateCase(currentCaseId, data),
@@ -263,24 +266,52 @@ const NewCase = () => {
   };
 
   // Handle docs-first workflow - create minimal case to get case ID
-  const handleDocsFirstStart = async () => {
+  const handleDocsFirstStart = async (seedData = {}) => {
     try {
       const minimalData = {
-        borrower_name: 'Pending Upload',
-        entity_type: 'proprietorship',
-        program_type: 'banking',
+        borrower_name: seedData.borrower_name || 'Pending Upload',
+        entity_type: seedData.entity_type || 'proprietorship',
+        program_type: seedData.program_type || 'banking',
+        pincode: seedData.pincode || undefined,
+        loan_amount_requested:
+          seedData.loan_amount_requested !== null && seedData.loan_amount_requested !== undefined
+            ? seedData.loan_amount_requested
+            : undefined,
+        industry_type: seedData.industry_type || undefined,
       };
 
       const response = await createCase(minimalData);
       setCaseId(response.data.case_id);
       setWorkflowMode('docs-first');
       setStep(1); // Go to upload step
+      setValue('borrower_name', minimalData.borrower_name);
+      setValue('entity_type', minimalData.entity_type);
+      setValue('program_type', minimalData.program_type);
+      if (minimalData.pincode) {
+        setValue('pincode', minimalData.pincode);
+      }
+      if (minimalData.industry_type) {
+        setValue('industry', minimalData.industry_type);
+      }
       toast.success('Case created! Please upload documents.');
     } catch (error) {
       toast.error('Failed to create case. Please try again.');
       setStep(0); // Go back to mode selection
     }
   };
+
+  useEffect(() => {
+    if (!quickScanPrefill || step !== 0 || workflowMode || caseId) {
+      return;
+    }
+
+    const bootstrapFromQuickScan = async () => {
+      await handleDocsFirstStart(quickScanPrefill);
+      navigate('/cases/new', { replace: true, state: null });
+    };
+
+    void bootstrapFromQuickScan();
+  }, [quickScanPrefill, step, workflowMode, caseId, navigate]);
 
   return (
     <div className="max-w-4xl mx-auto">
