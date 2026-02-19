@@ -10,6 +10,7 @@ from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.enums import CaseStatus
@@ -69,11 +70,15 @@ class DocumentQueueManager:
         logger.info("Document queue worker-%s running.", worker_id)
 
         while not self._stop_event.is_set():
-            claimed = await self._claim_next_job()
-            if not claimed:
+            try:
+                claimed = await self._claim_next_job()
+                if not claimed:
+                    await asyncio.sleep(poll_interval)
+                    continue
+                await self._process_claimed_job(claimed)
+            except Exception as exc:
+                logger.error("Worker-%s loop error: %s", worker_id, exc, exc_info=True)
                 await asyncio.sleep(poll_interval)
-                continue
-            await self._process_claimed_job(claimed)
 
         logger.info("Document queue worker-%s exiting.", worker_id)
 
@@ -136,23 +141,31 @@ class DocumentQueueManager:
 
         except Exception as exc:
             logger.error("Document queue job %s failed: %s", claimed.job_id, exc, exc_info=True)
-            async with async_session_maker() as db:
-                job = await db.get(DocumentProcessingJob, claimed.job_id)
-                if not job:
-                    return
+            try:
+                async with async_session_maker() as db:
+                    job = await db.get(DocumentProcessingJob, claimed.job_id)
+                    if not job:
+                        return
 
-                job.error_message = str(exc)[:1000]
-                if int(job.attempts or 0) >= int(job.max_attempts or 1):
-                    job.status = "failed"
-                    job.completed_at = datetime.now(timezone.utc)
-                else:
-                    job.status = "queued"
-                    job.started_at = None
+                    job.error_message = str(exc)[:1000]
+                    if int(job.attempts or 0) >= int(job.max_attempts or 1):
+                        job.status = "failed"
+                        job.completed_at = datetime.now(timezone.utc)
+                    else:
+                        job.status = "queued"
+                        job.started_at = None
 
-                await self._sync_case_status(db, claimed.case_id)
-                await db.commit()
+                    await self._sync_case_status(db, claimed.case_id)
+                    await db.commit()
+            except Exception as mark_error:
+                logger.error(
+                    "Failed to persist queue failure state for job %s: %s",
+                    claimed.job_id,
+                    mark_error,
+                    exc_info=True,
+                )
 
-    async def _sync_case_status(self, case_id: UUID, db) -> None:
+    async def _sync_case_status(self, db: AsyncSession, case_id: UUID) -> None:
         rows = await db.execute(
             select(DocumentProcessingJob.status, func.count())
             .where(DocumentProcessingJob.case_id == case_id)
