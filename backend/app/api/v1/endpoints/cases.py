@@ -1,8 +1,12 @@
 """Case management API endpoints."""
+import io
+import zipfile
 from typing import List
 from uuid import UUID
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
@@ -200,6 +204,68 @@ async def get_case_documents(
     service = CaseEntryService(db)
     case = await service._get_case_by_case_id(case_id, current_user.id)
     return [service._document_to_response(doc) for doc in case.documents]
+
+
+@router.get("/{case_id}/documents/archive")
+async def download_case_documents_archive(
+    case_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Download all uploaded case documents as a ZIP archive.
+
+    Useful for one-click lender sharing from the report/email workflow.
+    """
+    service = CaseEntryService(db)
+    case = await service._get_case_by_case_id(case_id, current_user.id)
+
+    if not case.documents:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No documents found for this case"
+        )
+
+    archive_buffer = io.BytesIO()
+    filename_counts = {}
+    added_files = 0
+
+    with zipfile.ZipFile(archive_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for doc in case.documents:
+            if not doc.storage_key:
+                continue
+            file_content = await service.storage.get_file(doc.storage_key)
+            if not file_content:
+                continue
+
+            original_name = doc.original_filename or Path(doc.storage_key).name
+            duplicate_idx = filename_counts.get(original_name, 0)
+            filename_counts[original_name] = duplicate_idx + 1
+
+            if duplicate_idx > 0:
+                stem = Path(original_name).stem
+                suffix = Path(original_name).suffix
+                archive_name = f"{stem}_{duplicate_idx}{suffix}"
+            else:
+                archive_name = original_name
+
+            archive.writestr(archive_name, file_content)
+            added_files += 1
+
+    if added_files == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No readable files found to archive"
+        )
+
+    archive_buffer.seek(0)
+    return StreamingResponse(
+        iter([archive_buffer.getvalue()]),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{case_id}_documents.zip"'
+        }
+    )
 
 
 @router.get("/{case_id}/checklist", response_model=DocumentChecklist)

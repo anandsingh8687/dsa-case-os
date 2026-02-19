@@ -2,7 +2,7 @@
 Every Cowork task MUST import and use these schemas for inter-module communication."""
 
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime, date
 from uuid import UUID
 
@@ -281,8 +281,14 @@ class CaseReportData(BaseModel):
 
 
 # ─── Copilot ───────────────────────────────────────────────────
+class CopilotHistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class CopilotQuery(BaseModel):
     query: str
+    history: List[CopilotHistoryMessage] = []
 
 class CopilotResponse(BaseModel):
     answer: str

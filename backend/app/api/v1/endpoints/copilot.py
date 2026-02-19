@@ -39,7 +39,8 @@ async def query_copilot(
         # Process the query
         response = await process_copilot_query(
             query=query_data.query,
-            user_id=user_id
+            user_id=user_id,
+            ui_history=[item.model_dump() for item in query_data.history] if query_data.history else None
         )
 
         return response

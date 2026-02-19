@@ -23,6 +23,11 @@ export const getCase = (caseId) =>
 export const getCaseDocuments = (caseId) =>
   apiClient.get(`/cases/${caseId}/documents`);
 
+export const getCaseDocumentsArchive = (caseId) =>
+  apiClient.get(`/cases/${caseId}/documents/archive`, {
+    responseType: 'blob',
+  });
+
 export const updateCase = (caseId, data) =>
   apiClient.patch(`/cases/${caseId}`, data);
 
@@ -213,5 +218,9 @@ export const getLendersByPincode = (pincode) =>
   apiClient.get(`/lenders/by-pincode/${pincode}`);
 
 // Copilot
-export const queryCopilot = (query) =>
-  apiClient.post('/copilot/query', { query });
+export const queryCopilot = (payload) => {
+  if (typeof payload === 'string') {
+    return apiClient.post('/copilot/query', { query: payload });
+  }
+  return apiClient.post('/copilot/query', payload);
+};

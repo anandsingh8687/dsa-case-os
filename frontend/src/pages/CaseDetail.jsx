@@ -16,6 +16,7 @@ import {
 import {
   getCase,
   getCaseDocuments,
+  getCaseDocumentsArchive,
   updateCase,
   uploadDocuments,
   getDocumentChecklist,
@@ -54,6 +55,16 @@ const formatInThousands = (rawValue) => {
   return `₹${(Number(rawValue) / 1000).toLocaleString('en-IN', {
     maximumFractionDigits: 2,
   })}K`;
+};
+
+const normalizeEmailText = (value) => {
+  if (!value) return '';
+  return String(value)
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
 };
 
 const parseInterestRange = (rawRange) => {
@@ -228,6 +239,9 @@ const CaseDetail = () => {
   const [rpsPreview, setRpsPreview] = useState(null);
   const [emailLenderKey, setEmailLenderKey] = useState('');
   const [rmEmail, setRmEmail] = useState('');
+  const [useCustomLender, setUseCustomLender] = useState(false);
+  const [customLenderName, setCustomLenderName] = useState('');
+  const [customProductName, setCustomProductName] = useState('');
   const [reuploadFiles, setReuploadFiles] = useState([]);
 
   const { data: caseData, isLoading: caseLoading } = useQuery({
@@ -333,6 +347,25 @@ const CaseDetail = () => {
     },
     onError: () => {
       toast.error('Failed to download report');
+    },
+  });
+
+  const downloadCaseArchiveMutation = useMutation({
+    mutationFn: () => getCaseDocumentsArchive(caseId),
+    onSuccess: (response) => {
+      const blob = new Blob([response.data], { type: 'application/zip' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `${caseId}_documents.zip`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('Case documents ZIP downloaded');
+    },
+    onError: (error) => {
+      toast.error(error.response?.data?.detail || 'Failed to download document ZIP');
     },
   });
 
@@ -525,9 +558,16 @@ const CaseDetail = () => {
     { id: 'report', label: 'Report', icon: FileDown },
   ];
 
-  const openMailtoDraft = () => {
-    if (!selectedEmailLender) {
-      toast.error('Select a lender first');
+  const openMailtoDraft = async (prepareZipFirst = false) => {
+    const lenderName = useCustomLender
+      ? customLenderName.trim()
+      : selectedEmailLender?.lender_name;
+    const productName = useCustomLender
+      ? (customProductName.trim() || 'Business Loan')
+      : selectedEmailLender?.product_name;
+
+    if (!lenderName) {
+      toast.error('Select a lender or enter a custom lender name');
       return;
     }
     if (!rmEmail) {
@@ -535,20 +575,43 @@ const CaseDetail = () => {
       return;
     }
 
+    if (prepareZipFirst) {
+      try {
+        await downloadCaseArchiveMutation.mutateAsync();
+      } catch {
+        return;
+      }
+    }
+
     const loggedInUser = getUser();
     const resolvedTicket =
-      selectedEmailLender.expected_ticket_max ??
+      selectedEmailLender?.expected_ticket_max ??
       firstMatchTicket ??
       caseInfo?.loan_amount_requested ??
       null;
     const ticketText = formatLakhAmount(resolvedTicket);
-    const strengths = (caseReport?.strengths || []).slice(0, 3).join('; ') || 'Clean basic profile';
-    const docNames = documents.map((doc) => doc.original_filename).filter(Boolean).slice(0, 8).join(', ') || 'Available in case folder';
-    const subject = `[Credilo] ${selectedEmailLender.product_name} Case Submission - ${caseInfo?.borrower_name || caseId} (${caseId})`;
+    const strengthsList = (caseReport?.strengths || [])
+      .map((item) => normalizeEmailText(item))
+      .filter(Boolean)
+      .slice(0, 4);
+    const strengths =
+      strengthsList.length > 0
+        ? strengthsList.map((item) => `- ${item}`).join('\n')
+        : '- Clean banking profile';
+    const docNames = documents
+      .map((doc) => normalizeEmailText(doc.original_filename))
+      .filter(Boolean)
+      .slice(0, 12);
+    const docsInline = docNames.length > 0 ? docNames.join(', ') : 'Uploaded in case workspace';
+
+    const subject = `[Credilo] ${productName} Case Submission - ${caseInfo?.borrower_name || caseId} (${caseId})`;
     const body = [
-      `Dear Team ${selectedEmailLender.lender_name},`,
+      `Hi ${lenderName} team,`,
       '',
-      `Please find below a new ${selectedEmailLender.product_name} opportunity for your review:`,
+      'Sharing a lender-ready case summary from Credilo.',
+      '',
+      'Case Snapshot:',
+      `- Case ID: ${caseId}`,
       `- Borrower: ${caseInfo?.borrower_name || 'N/A'}`,
       `- Entity: ${caseInfo?.entity_type || 'N/A'}`,
       `- CIBIL: ${features?.cibil_score || caseInfo?.cibil_score_manual || 'N/A'}`,
@@ -557,15 +620,18 @@ const CaseDetail = () => {
       `- Indicative Eligible Ticket: ${ticketText}`,
       `- Pincode: ${features?.pincode || caseInfo?.pincode || 'N/A'}`,
       '',
-      `Key strengths: ${strengths}`,
-      `Documents available: ${docNames}`,
+      'Top Strength Pointers:',
+      strengths,
       '',
-      `Please share eligibility feedback and next steps.`,
+      `Document Package: ${caseId}_documents.zip`,
+      `Included Files: ${docsInline}`,
+      '',
+      'Please review and share eligibility feedback with next steps.',
       '',
       'Regards,',
       `${loggedInUser?.full_name || 'DSA Team'}`,
       'Credilo',
-    ].join('\\n');
+    ].join('\n');
 
     const mailto = `mailto:${encodeURIComponent(rmEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.location.href = mailto;
@@ -1516,27 +1582,69 @@ const CaseDetail = () => {
                   </div>
                 )}
 
-                {allEligibilityResults.length > 0 && (
-                  <div className="p-4 rounded-lg border border-gray-200 bg-white">
+                <div className="p-4 rounded-lg border border-gray-200 bg-white">
                     <h4 className="font-semibold mb-3">Email Collaboration (Lender RM)</h4>
+                    <div className="mb-3 flex items-center gap-2">
+                      <input
+                        id="custom-lender-toggle"
+                        type="checkbox"
+                        checked={useCustomLender}
+                        onChange={(e) => setUseCustomLender(e.target.checked)}
+                        className="h-4 w-4"
+                      />
+                      <label htmlFor="custom-lender-toggle" className="text-sm text-gray-700">
+                        Use custom lender (not in knowledge base list)
+                      </label>
+                    </div>
+
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      <div className="md:col-span-1">
-                        <label className="block text-xs text-gray-600 mb-1">Lender</label>
-                        <select
-                          value={emailLenderKey}
-                          onChange={(e) => setEmailLenderKey(e.target.value)}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                        >
-                          {allEligibilityResults.map((lender) => (
-                            <option
-                              key={`mail-lender-${lender.lender_name}-${lender.product_name}-${lender.hard_filter_status}`}
-                              value={`${lender.lender_name}::${lender.product_name}`}
-                            >
-                              {lender.lender_name} • {lender.product_name} ({String(lender.hard_filter_status || '').toUpperCase()})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                      {!useCustomLender ? (
+                        <div className="md:col-span-1">
+                          <label className="block text-xs text-gray-600 mb-1">Lender</label>
+                          <select
+                            value={emailLenderKey}
+                            onChange={(e) => setEmailLenderKey(e.target.value)}
+                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                            disabled={allEligibilityResults.length === 0}
+                          >
+                            {allEligibilityResults.length === 0 && (
+                              <option value="">No evaluated lenders available</option>
+                            )}
+                            {allEligibilityResults.map((lender) => (
+                              <option
+                                key={`mail-lender-${lender.lender_name}-${lender.product_name}-${lender.hard_filter_status}`}
+                                value={`${lender.lender_name}::${lender.product_name}`}
+                              >
+                                {lender.lender_name} • {lender.product_name} ({String(lender.hard_filter_status || '').toUpperCase()})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="md:col-span-1">
+                            <label className="block text-xs text-gray-600 mb-1">Custom Lender Name</label>
+                            <input
+                              type="text"
+                              value={customLenderName}
+                              onChange={(e) => setCustomLenderName(e.target.value)}
+                              placeholder="e.g., HDFC Bank"
+                              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                            />
+                          </div>
+                          <div className="md:col-span-1">
+                            <label className="block text-xs text-gray-600 mb-1">Product Name</label>
+                            <input
+                              type="text"
+                              value={customProductName}
+                              onChange={(e) => setCustomProductName(e.target.value)}
+                              placeholder="e.g., BL / LAP / STBL"
+                              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                            />
+                          </div>
+                        </>
+                      )}
+
                       <div className="md:col-span-1">
                         <label className="block text-xs text-gray-600 mb-1">RM Email</label>
                         <input
@@ -1547,17 +1655,39 @@ const CaseDetail = () => {
                           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                         />
                       </div>
-                      <div className="md:col-span-1 flex items-end">
-                        <Button className="w-full" onClick={openMailtoDraft}>
-                          Open Email Draft
+                      <div className="md:col-span-1 flex items-end gap-2">
+                        <Button
+                          className="w-full"
+                          onClick={() => { void openMailtoDraft(true); }}
+                          disabled={downloadCaseArchiveMutation.isPending}
+                        >
+                          {downloadCaseArchiveMutation.isPending ? 'Preparing ZIP...' : 'Prepare ZIP + Open Draft'}
+                        </Button>
+                      </div>
+                      <div className="md:col-span-1 flex items-end gap-2">
+                        <Button
+                          variant="outline"
+                          className="w-full"
+                          onClick={() => { void openMailtoDraft(false); }}
+                        >
+                          Open Draft Only
+                        </Button>
+                      </div>
+                      <div className="md:col-span-1 flex items-end gap-2">
+                        <Button
+                          variant="outline"
+                          className="w-full"
+                          onClick={() => downloadCaseArchiveMutation.mutate()}
+                        >
+                          Download Case ZIP
                         </Button>
                       </div>
                     </div>
                     <p className="text-xs text-gray-500 mt-2">
-                      Opens your email client with prefilled case summary, strengths, and document list.
+                      Browser email compose cannot auto-attach files. Use "Prepare ZIP + Open Draft" for one-click draft
+                      plus ZIP download, then attach the downloaded ZIP in your mail client.
                     </p>
-                  </div>
-                )}
+                </div>
               </div>
             )}
           </div>

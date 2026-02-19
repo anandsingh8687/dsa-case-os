@@ -57,7 +57,11 @@ def _sanitize_payload(value: Any) -> Any:
 # COPILOT SERVICE
 # ═══════════════════════════════════════════════════════════════
 
-async def query_copilot(query: str, user_id: Optional[str] = None) -> CopilotResponse:
+async def query_copilot(
+    query: str,
+    user_id: Optional[str] = None,
+    ui_history: Optional[List[Dict[str, str]]] = None
+) -> CopilotResponse:
     """Process a natural language query and return an answer.
 
     Args:
@@ -83,7 +87,7 @@ async def query_copilot(query: str, user_id: Optional[str] = None) -> CopilotRes
             logger.info(f"Retrieved {len(lender_data)} lender records")
 
         # Step 3: Build LLM prompt and get response (with conversation memory)
-        answer = await _generate_answer(query, query_type, params, lender_data, user_id)
+        answer = await _generate_answer(query, query_type, params, lender_data, user_id, ui_history)
         answer = _sanitize_text(answer)
 
         # Step 4: Build sources list
@@ -210,6 +214,25 @@ async def _get_conversation_history(user_id: Optional[str]) -> List[Dict[str, st
         return []
 
 
+def _normalize_ui_history(ui_history: Optional[List[Dict[str, str]]]) -> List[Dict[str, str]]:
+    """Normalize optional UI history payload into OpenAI chat message format."""
+    if not ui_history:
+        return []
+
+    normalized: List[Dict[str, str]] = []
+    for item in ui_history[-12:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = _sanitize_text(str(item.get("content", "")).strip())
+        if not content:
+            continue
+        normalized.append({"role": role, "content": content[:3000]})
+    return normalized
+
+
 # ═══════════════════════════════════════════════════════════════
 # KIMI 2.5 API INTEGRATION (Moonshot AI - OpenAI compatible)
 # ═══════════════════════════════════════════════════════════════
@@ -219,7 +242,8 @@ async def _generate_answer(
     query_type: QueryType,
     params: Dict[str, Any],
     lender_data: List[Dict[str, Any]],
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    ui_history: Optional[List[Dict[str, str]]] = None
 ) -> str:
     """Generate a natural language answer using Kimi 2.5 API.
 
@@ -232,6 +256,7 @@ async def _generate_answer(
         params: Extracted parameters
         lender_data: Retrieved lender data
         user_id: Optional user ID for conversation history
+        ui_history: Optional conversation history passed by UI
 
     Returns:
         Natural language answer
@@ -243,6 +268,7 @@ async def _generate_answer(
 
     # Fetch conversation history for context
     conversation_history = await _get_conversation_history(user_id) if user_id else []
+    normalized_ui_history = _normalize_ui_history(ui_history)
 
     # Build the prompt
     prompt = _build_llm_prompt(query, query_type, params, lender_data)
@@ -262,7 +288,7 @@ async def _generate_answer(
             }
         ]
 
-        # Add previous conversation turns (limit to last 5 exchanges to keep context manageable)
+        # Add previous conversation turns from DB memory (limit to last 5 exchanges).
         for turn in conversation_history[-5:]:
             messages.append({
                 "role": "user",
@@ -273,28 +299,46 @@ async def _generate_answer(
                 "content": turn["response"]
             })
 
+        # Add UI-level thread memory so conversation survives page refresh/new loads.
+        for message in normalized_ui_history[-10:]:
+            messages.append(message)
+
         # Add current query
         messages.append({
             "role": "user",
             "content": prompt
         })
 
-        # Call Kimi 2.5 API
-        response = await client.chat.completions.create(
-            model=settings.LLM_MODEL,
-            max_tokens=1024,
-            temperature=1.0,
-            messages=messages
-        )
+        # Try fast copilot model first, then fall back to configured/default models.
+        model_candidates: List[str] = []
+        for model_name in [settings.COPILOT_FAST_MODEL, settings.LLM_MODEL, "moonshot-v1-8k"]:
+            if model_name and model_name not in model_candidates:
+                model_candidates.append(model_name)
 
-        # Extract the answer from the response
-        answer = response.choices[0].message.content
+        last_error: Optional[Exception] = None
+        for model_name in model_candidates:
+            try:
+                response = await client.chat.completions.create(
+                    model=model_name,
+                    max_tokens=1024,
+                    temperature=0.35,
+                    messages=messages
+                )
 
-        # Validate completeness: Check if all lenders are mentioned
-        if lender_data and len(lender_data) >= 5:
-            answer = _validate_and_append_missing_lenders(answer, lender_data)
+                answer = response.choices[0].message.content
+                logger.info("Copilot response generated using model: %s", model_name)
 
-        return answer
+                # Validate completeness: Check if all lenders are mentioned
+                if lender_data and len(lender_data) >= 5:
+                    answer = _validate_and_append_missing_lenders(answer, lender_data)
+
+                return answer
+            except Exception as model_error:
+                last_error = model_error
+                logger.warning("Copilot model %s failed: %s", model_name, model_error)
+
+        if last_error:
+            raise last_error
 
     except Exception as e:
         logger.error(f"Error calling Kimi API: {e}", exc_info=True)
@@ -414,6 +458,15 @@ RESPONSE GUIDELINES:
    - For rapidly changing info (interest rates), mention they vary
    - If you don't know something, admit it and suggest alternatives
 
+6. **RESPONSE FORMAT (MANDATORY)**:
+   - Use short markdown sections in this order:
+     1) `### Quick Take`
+     2) `### Best Options`
+     3) `### Why These Lenders`
+     4) `### Next Actions`
+   - Prefer bullet points over long paragraphs
+   - Keep each bullet actionable and DSA-oriented
+
 Be professional, knowledgeable, and genuinely helpful. Think of yourself as a senior lending consultant."""
 
 
@@ -433,6 +486,7 @@ def _build_llm_prompt(
         prompt_parts.append("\nThis is a KNOWLEDGE question. Answer directly using your expertise on Indian business loans.")
         prompt_parts.append("Provide a clear, comprehensive explanation with examples where helpful.")
         prompt_parts.append("Use Indian terminology (Lakhs, Crores, CIBIL) and be conversational.")
+        prompt_parts.append("Return concise markdown with clear headings and bullet points.")
         return "\n".join(prompt_parts)
 
     # DATABASE queries: Use DB results if available
@@ -456,6 +510,7 @@ def _build_llm_prompt(
 
     prompt_parts.append(f"\nUSER QUESTION: {query}")
     prompt_parts.append("\nProvide a clear, actionable answer. Be specific with lender names and approximate numbers.")
+    prompt_parts.append("Use markdown headings and bullets so a DSA can quickly forward/share the response.")
 
     return "\n".join(prompt_parts)
 

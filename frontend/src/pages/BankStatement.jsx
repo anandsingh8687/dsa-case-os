@@ -1,9 +1,17 @@
 import React, { useMemo, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FileSpreadsheet, UploadCloud, Download, Loader2 } from 'lucide-react';
+import { FileSpreadsheet, UploadCloud, Download, Loader2, ArrowRight } from 'lucide-react';
 
-import { processBankStatements } from '../api/services';
+import {
+  processBankStatements,
+  createCase,
+  uploadDocuments,
+  runExtraction,
+  runScoring,
+  generateReport,
+} from '../api/services';
 import { Card, Button } from '../components/ui';
 
 const formatBytes = (bytes) => {
@@ -19,8 +27,16 @@ const formatBytes = (bytes) => {
 };
 
 const BankStatement = () => {
+  const navigate = useNavigate();
   const [files, setFiles] = useState([]);
   const [jsonPreview, setJsonPreview] = useState(null);
+  const [analysisReady, setAnalysisReady] = useState(false);
+  const [convertInput, setConvertInput] = useState({
+    borrower_name: '',
+    entity_type: 'proprietorship',
+    program_type: 'banking',
+    pincode: '',
+  });
 
   const totalSize = useMemo(
     () => files.reduce((sum, file) => sum + (file.size || 0), 0),
@@ -36,6 +52,7 @@ const BankStatement = () => {
       return processBankStatements(formData);
     },
     onSuccess: async (response) => {
+      setAnalysisReady(true);
       const contentType = response.headers?.['content-type'] || '';
       const contentDisposition = response.headers?.['content-disposition'] || '';
 
@@ -85,6 +102,7 @@ const BankStatement = () => {
       return lower.endsWith('.pdf') || lower.endsWith('.zip') || lower.endsWith('.xlsx') || lower.endsWith('.xls');
     });
     setFiles(accepted);
+    setAnalysisReady(false);
   };
 
   const runAnalysis = () => {
@@ -94,6 +112,64 @@ const BankStatement = () => {
     }
     processMutation.mutate(files);
   };
+
+  const caseUploadEligibleFiles = useMemo(
+    () => files.filter((file) => /\.(pdf|zip|png|jpg|jpeg|tiff)$/i.test(file.name)),
+    [files]
+  );
+
+  const convertToCaseMutation = useMutation({
+    mutationFn: async () => {
+      const borrowerName = convertInput.borrower_name.trim();
+      if (!borrowerName) {
+        throw new Error('Borrower name is required to convert into a full case.');
+      }
+
+      const created = await createCase({
+        borrower_name: borrowerName,
+        entity_type: convertInput.entity_type,
+        program_type: convertInput.program_type,
+        pincode: convertInput.pincode || undefined,
+      });
+      const newCaseId = created.data.case_id;
+
+      if (caseUploadEligibleFiles.length === 0) {
+        return {
+          caseId: newCaseId,
+          docsUploaded: false,
+        };
+      }
+
+      const formData = new FormData();
+      caseUploadEligibleFiles.forEach((file) => {
+        formData.append('files', file);
+      });
+
+      await uploadDocuments(newCaseId, formData);
+
+      // Fire downstream processing in background; conversion should stay fast for DSA workflow.
+      void runExtraction(newCaseId)
+        .then(() => runScoring(newCaseId))
+        .then(() => generateReport(newCaseId))
+        .catch(() => null);
+
+      return {
+        caseId: newCaseId,
+        docsUploaded: true,
+      };
+    },
+    onSuccess: ({ caseId, docsUploaded }) => {
+      toast.success(
+        docsUploaded
+          ? 'Full case created with bank statement files. Opening workspace.'
+          : 'Full case created. Please upload supporting documents in case workspace.'
+      );
+      navigate(`/cases/${caseId}`);
+    },
+    onError: (error) => {
+      toast.error(error?.message || error.response?.data?.detail || 'Failed to convert to full case.');
+    },
+  });
 
   return (
     <div className="space-y-6">
@@ -176,6 +252,7 @@ const BankStatement = () => {
             onClick={() => {
               setFiles([]);
               setJsonPreview(null);
+              setAnalysisReady(false);
             }}
             disabled={processMutation.isPending}
           >
@@ -183,6 +260,85 @@ const BankStatement = () => {
           </Button>
         </div>
       </Card>
+
+      {analysisReady && (
+        <Card className="border-blue-100 bg-blue-50">
+          <h2 className="text-lg font-semibold text-blue-900 mb-2">Convert to Full Case</h2>
+          <p className="text-sm text-blue-800 mb-4">
+            Move this bank-statement run into the full DSA case journey. Bank files will be attached automatically
+            when supported (PDF/ZIP/Image), and you can add remaining docs in case workspace.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-blue-900 mb-1">Borrower Name</label>
+              <input
+                value={convertInput.borrower_name}
+                onChange={(e) => setConvertInput((prev) => ({ ...prev, borrower_name: e.target.value }))}
+                placeholder="Enter borrower / business name"
+                className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-blue-900 mb-1">Pincode (Optional)</label>
+              <input
+                value={convertInput.pincode}
+                onChange={(e) =>
+                  setConvertInput((prev) => ({ ...prev, pincode: e.target.value.replace(/\D/g, '').slice(0, 6) }))
+                }
+                placeholder="6-digit pincode"
+                className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-blue-900 mb-1">Entity Type</label>
+              <select
+                value={convertInput.entity_type}
+                onChange={(e) => setConvertInput((prev) => ({ ...prev, entity_type: e.target.value }))}
+                className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm"
+              >
+                <option value="proprietorship">Proprietorship</option>
+                <option value="partnership">Partnership</option>
+                <option value="llp">LLP</option>
+                <option value="pvt_ltd">Private Limited</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-blue-900 mb-1">Program Type</label>
+              <select
+                value={convertInput.program_type}
+                onChange={(e) => setConvertInput((prev) => ({ ...prev, program_type: e.target.value }))}
+                className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm"
+              >
+                <option value="banking">Banking</option>
+                <option value="income">Income</option>
+                <option value="hybrid">Hybrid</option>
+              </select>
+            </div>
+          </div>
+          <div className="mt-3 text-xs text-blue-800">
+            Files selected: {files.length} | Eligible for auto-attach: {caseUploadEligibleFiles.length}
+          </div>
+          <div className="mt-4">
+            <Button
+              onClick={() => convertToCaseMutation.mutate()}
+              disabled={convertToCaseMutation.isPending}
+              className="inline-flex items-center gap-2"
+            >
+              {convertToCaseMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Converting...
+                </>
+              ) : (
+                <>
+                  Convert to Full Case
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
+            </Button>
+          </div>
+        </Card>
+      )}
 
       {jsonPreview && (
         <Card>

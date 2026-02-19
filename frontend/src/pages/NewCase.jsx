@@ -81,6 +81,8 @@ const NewCase = () => {
   } = useForm();
 
   const quickScanPrefill = location.state?.quickScanPrefill || null;
+  const bankStatementPrefill = location.state?.bankStatementPrefill || null;
+  const inboundPrefill = quickScanPrefill || bankStatementPrefill;
 
   const updateCaseMutation = useMutation({
     mutationFn: ({ caseId: currentCaseId, data }) => updateCase(currentCaseId, data),
@@ -328,29 +330,35 @@ const NewCase = () => {
   };
 
   useEffect(() => {
-    if (!quickScanPrefill || step !== 0 || workflowMode || caseId) {
+    if (!inboundPrefill || step !== 0 || workflowMode || caseId) {
       return;
     }
 
     setWorkflowMode('form-first');
     setStep(1);
-    if (quickScanPrefill.borrower_name) {
-      setValue('borrower_name', quickScanPrefill.borrower_name);
+    if (
+      inboundPrefill.borrower_name &&
+      String(inboundPrefill.borrower_name).trim().toLowerCase() !== 'quick scan prospect'
+    ) {
+      setValue('borrower_name', inboundPrefill.borrower_name);
     }
-    if (quickScanPrefill.entity_type) {
-      setValue('entity_type', quickScanPrefill.entity_type);
+    if (inboundPrefill.entity_type) {
+      setValue('entity_type', inboundPrefill.entity_type);
     }
-    if (quickScanPrefill.program_type) {
-      setValue('program_type', quickScanPrefill.program_type);
+    if (inboundPrefill.program_type) {
+      setValue('program_type', inboundPrefill.program_type);
     }
-    if (quickScanPrefill.pincode) {
-      setValue('pincode', quickScanPrefill.pincode);
+    if (inboundPrefill.industry_type) {
+      setValue('industry', inboundPrefill.industry_type);
     }
-    if (quickScanPrefill.loan_amount_requested !== null && quickScanPrefill.loan_amount_requested !== undefined) {
-      setValue('loan_amount_requested', quickScanPrefill.loan_amount_requested);
+    if (inboundPrefill.pincode) {
+      setValue('pincode', inboundPrefill.pincode);
+    }
+    if (inboundPrefill.loan_amount_requested !== null && inboundPrefill.loan_amount_requested !== undefined) {
+      setValue('loan_amount_requested', inboundPrefill.loan_amount_requested);
     }
     navigate('/cases/new', { replace: true, state: null });
-  }, [quickScanPrefill, step, workflowMode, caseId, navigate]);
+  }, [inboundPrefill, step, workflowMode, caseId, navigate, setValue]);
 
   useEffect(() => {
     if (!gstData) return;
@@ -442,7 +450,7 @@ const NewCase = () => {
 
             <div className="mt-6 max-w-3xl mx-auto">
               <button
-                onClick={() => navigate('/quick-scan')}
+                onClick={() => navigate('/quick-scan', { state: { fromNewCase: true } })}
                 className="w-full p-4 border border-blue-200 bg-blue-50 rounded-xl hover:bg-blue-100 transition-colors text-left"
               >
                 <div className="flex items-center gap-3">

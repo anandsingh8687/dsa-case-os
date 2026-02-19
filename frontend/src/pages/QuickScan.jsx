@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Search, ArrowRight, Download } from 'lucide-react';
+import { Search, ArrowRight, Download, ChevronLeft } from 'lucide-react';
 
 import {
   runQuickScan,
@@ -23,8 +23,10 @@ const defaultForm = {
 
 const QuickScan = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [form, setForm] = useState(defaultForm);
   const [scanResult, setScanResult] = useState(null);
+  const launchedFromNewCase = Boolean(location.state?.fromNewCase);
 
   const { data: kbStatsData } = useQuery({
     queryKey: ['quick-scan-kb-stats'],
@@ -97,7 +99,6 @@ const QuickScan = () => {
     navigate('/cases/new', {
       state: {
         quickScanPrefill: {
-          borrower_name: 'Quick Scan Prospect',
           entity_type: isBusinessLoan ? form.entity_type_or_employer : 'proprietorship',
           program_type: form.loan_type === 'PL' ? 'income' : form.loan_type === 'HL' ? 'hybrid' : 'banking',
           pincode: form.pincode,
@@ -110,6 +111,29 @@ const QuickScan = () => {
 
   return (
     <div className="space-y-6">
+      {launchedFromNewCase && (
+        <Card className="border-blue-100 bg-blue-50">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-blue-900">New Case Assistant: Quick Scan</div>
+              <div className="text-xs text-blue-800 mt-1">
+                Run this scan and convert directly into New Case with prefilled fields.
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              className="w-full md:w-auto"
+              onClick={() => navigate('/cases/new')}
+            >
+              <span className="inline-flex items-center gap-2">
+                <ChevronLeft className="w-4 h-4" />
+                Back to New Case
+              </span>
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <Card>
         <h1 className="text-2xl font-bold text-gray-900 mb-2">Instant Eligibility Quick Scan</h1>
         <p className="text-sm text-gray-600 mb-6">

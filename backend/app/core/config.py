@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     LLM_API_KEY: Optional[str] = None
     LLM_MODEL: str = "kimi-k2.5"
     LLM_BASE_URL: str = "https://api.moonshot.ai/v1"
+    COPILOT_FAST_MODEL: str = os.getenv("COPILOT_FAST_MODEL", "moonshot-v1-8k")
 
     # WhatsApp Service
     WHATSAPP_SERVICE_URL: str = os.getenv("WHATSAPP_SERVICE_URL", "http://localhost:3001")

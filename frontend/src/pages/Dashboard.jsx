@@ -152,41 +152,59 @@ const Dashboard = () => {
                       {caseItem.case_id?.substring(0, 8)}...
                     </p>
                   </div>
-                  <Badge
-                    variant={
-                      caseItem.status === 'report_generated'
-                        ? 'success'
-                        : caseItem.status === 'processing'
-                        ? 'warning'
-                        : caseItem.status === 'failed'
-                        ? 'danger'
-                        : 'default'
-                    }
-                  >
-                    {statusInfo.label}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      variant={
+                        caseItem.status === 'report_generated'
+                          ? 'success'
+                          : caseItem.status === 'processing'
+                          ? 'warning'
+                          : caseItem.status === 'failed'
+                          ? 'danger'
+                          : 'default'
+                      }
+                    >
+                      {statusInfo.label}
+                    </Badge>
+                    <button
+                      type="button"
+                      title={`Delete ${caseItem.case_id}`}
+                      aria-label={`Delete ${caseItem.case_id}`}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors"
+                      disabled={deleteCaseMutation.isPending}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        const confirmed = window.confirm(
+                          `Delete case ${caseItem.case_id}? This cannot be undone.`
+                        );
+                        if (!confirmed) return;
+                        deleteCaseMutation.mutate(caseItem.case_id);
+                      }}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="mb-3">
                   <Button
                     size="sm"
                     variant="outline"
-                    className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
-                    disabled={deleteCaseMutation.isPending}
+                    className="text-primary border-blue-200 hover:bg-blue-50"
                     onClick={(event) => {
                       event.stopPropagation();
-                      const confirmed = window.confirm(
-                        `Delete case ${caseItem.case_id}? This cannot be undone.`
-                      );
-                      if (!confirmed) return;
-                      deleteCaseMutation.mutate(caseItem.case_id);
+                      navigate(`/cases/${caseItem.case_id}`);
                     }}
                   >
-                    <span className="inline-flex items-center gap-1">
-                      <Trash2 className="w-3.5 h-3.5" />
-                      Delete
-                    </span>
+                    Open Case
                   </Button>
+                </div>
+
+                <div className="mb-3 rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                  {caseItem.program_type
+                    ? `${String(caseItem.program_type).toUpperCase()} flow`
+                    : 'Program not set'}
+                  {' '}• Click to open profile, documents, eligibility, and report.
                 </div>
 
                 <div className="space-y-2 text-sm">

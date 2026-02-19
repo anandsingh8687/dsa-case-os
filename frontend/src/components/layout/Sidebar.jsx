@@ -6,7 +6,6 @@ import {
   MessageSquare,
   MapPin,
   Settings,
-  Search,
   Shield,
   FileSpreadsheet,
 } from 'lucide-react';
@@ -19,7 +18,6 @@ const Sidebar = () => {
   const navItems = [
     { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/cases/new', icon: FilePlus, label: 'New Case' },
-    { to: '/quick-scan', icon: Search, label: 'Quick Scan' },
     { to: '/copilot', icon: MessageSquare, label: 'Copilot' },
     { to: '/bank-statement', icon: FileSpreadsheet, label: 'Bank Statement' },
     { to: '/pincode-checker', icon: MapPin, label: 'Pincode Checker' },
