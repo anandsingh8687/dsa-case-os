@@ -24,6 +24,7 @@ from app.db.database import get_db_session
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+LLM_STRATEGY_TIMEOUT_SECONDS = 8.0
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -423,6 +424,7 @@ async def generate_submission_strategy(
         client = AsyncOpenAI(
             api_key=settings.LLM_API_KEY,
             base_url=settings.LLM_BASE_URL,
+            timeout=LLM_STRATEGY_TIMEOUT_SECONDS,
         )
 
         # Build borrower story elements
@@ -470,7 +472,7 @@ If there are any profile weaknesses, address them proactively. Turn them into op
 
         response = await client.chat.completions.create(
             model=settings.LLM_MODEL,
-            max_tokens=800,
+            max_tokens=550,
             # Kimi 2.5 on this deployment currently accepts only temperature=1.
             temperature=1.0,
             messages=[

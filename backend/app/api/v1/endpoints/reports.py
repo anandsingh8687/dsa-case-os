@@ -4,6 +4,7 @@ Endpoints for generating and retrieving case intelligence reports.
 """
 
 import logging
+import time
 from uuid import UUID
 from pathlib import Path
 
@@ -93,13 +94,19 @@ async def generate_report(case_id: str):
         Success message with report details
     """
     logger.info(f"Generating report for case {case_id}")
+    started_at = time.perf_counter()
+    assemble_ms = 0.0
+    pdf_ms = 0.0
+    save_ms = 0.0
 
     try:
         # Get case UUID
         case_uuid = await get_case_uuid_from_case_id(case_id)
 
         # Assemble report data
+        assemble_started = time.perf_counter()
         report_data = await assemble_case_report(case_uuid)
+        assemble_ms = round((time.perf_counter() - assemble_started) * 1000, 2)
 
         if not report_data:
             raise HTTPException(
@@ -108,7 +115,9 @@ async def generate_report(case_id: str):
             )
 
         # Generate PDF
+        pdf_started = time.perf_counter()
         pdf_bytes = generate_pdf_report(report_data)
+        pdf_ms = round((time.perf_counter() - pdf_started) * 1000, 2)
 
         # Save PDF to storage
         # In production, this would go to S3. For now, save locally.
@@ -121,13 +130,16 @@ async def generate_report(case_id: str):
         save_pdf_to_file(pdf_bytes, str(pdf_path))
 
         # Save report data to database
+        save_started = time.perf_counter()
         storage_key = str(pdf_path)  # In production, this would be S3 key
         report_uuid = await save_report_to_db(case_uuid, report_data, storage_key)
 
         # Update case status
         await update_case_status(case_uuid, CaseStatus.REPORT_GENERATED)
+        save_ms = round((time.perf_counter() - save_started) * 1000, 2)
 
         logger.info(f"Report generated successfully for case {case_id}")
+        total_ms = round((time.perf_counter() - started_at) * 1000, 2)
 
         return {
             "status": "success",
@@ -141,6 +153,12 @@ async def generate_report(case_id: str):
             ]),
             "strengths_count": len(report_data.strengths),
             "risks_count": len(report_data.risk_flags),
+            "timing_ms": {
+                "assemble_report": assemble_ms,
+                "pdf_generation": pdf_ms,
+                "save_and_status_update": save_ms,
+                "total": total_ms,
+            },
         }
 
     except HTTPException:
