@@ -35,6 +35,7 @@ const PROGRAM_OPTIONS = [
 ];
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const isRetryableStatusCode = (statusCode) => [408, 429, 500, 502, 503, 504].includes(Number(statusCode));
 
 const getBorrowerNameFromGst = (gstPayload) => {
   if (!gstPayload || typeof gstPayload !== 'object') return '';
@@ -95,10 +96,22 @@ const NewCase = () => {
   });
 
   const runPostUploadPipeline = async (targetCaseId) => {
+    const withRetry = async (fn) => {
+      try {
+        return await fn();
+      } catch (error) {
+        if (!isRetryableStatusCode(error?.response?.status)) {
+          throw error;
+        }
+        await wait(1200);
+        return fn();
+      }
+    };
+
     try {
-      await runExtraction(targetCaseId);
-      await runScoring(targetCaseId);
-      await generateReport(targetCaseId);
+      await withRetry(() => runExtraction(targetCaseId));
+      await withRetry(() => runScoring(targetCaseId));
+      await withRetry(() => generateReport(targetCaseId));
       toast.success('All processing stages completed automatically.');
     } catch (error) {
       const details = error?.response?.data?.detail;
