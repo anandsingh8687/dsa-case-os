@@ -8,10 +8,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
 from app.core.deps import get_current_user
+from app.models.case import DocumentProcessingJob
 from app.models.user import User
 from app.schemas.shared import (
     CaseCreate,
@@ -413,11 +415,34 @@ async def get_case_status(
     service = CaseEntryService(db)
     case = await service._get_case_by_case_id(case_id, current_user.id)
 
+    job_rows = await db.execute(
+        select(DocumentProcessingJob.status, func.count(DocumentProcessingJob.id))
+        .where(DocumentProcessingJob.case_id == case.id)
+        .group_by(DocumentProcessingJob.status)
+    )
+    counts = {status: int(count) for status, count in job_rows.all()}
+    queued = counts.get("queued", 0)
+    processing = counts.get("processing", 0)
+    completed = counts.get("completed", 0)
+    failed = counts.get("failed", 0)
+    total = queued + processing + completed + failed
+    done = completed + failed
+    completion_pct = int(round((done * 100 / total), 0)) if total > 0 else 100
+
     return {
         "case_id": case.case_id,
         "status": case.status,
         "updated_at": case.updated_at,
         "has_gst_data": bool(case.gst_data),
+        "document_jobs": {
+            "queued": queued,
+            "processing": processing,
+            "completed": completed,
+            "failed": failed,
+            "total": total,
+            "in_progress": (queued + processing) > 0,
+            "completion_pct": completion_pct,
+        },
     }
 
 

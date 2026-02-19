@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from app.core.config import settings
 from app.core.latency_metrics import record_latency
 from app.db.database import init_db, close_db
+from app.services.document_queue import document_queue_manager
 from app.api.v1.endpoints import (
     auth, cases, documents, extraction,
     eligibility, reports, copilot, lenders, whatsapp, share, pincodes,
@@ -74,9 +75,11 @@ async def lifespan(application: FastAPI):
 
     # Auto-ingest lender data if tables are empty
     await _auto_ingest_lender_data()
+    await document_queue_manager.start()
 
     yield
     # Shutdown
+    await document_queue_manager.stop()
     await close_db()
 
 

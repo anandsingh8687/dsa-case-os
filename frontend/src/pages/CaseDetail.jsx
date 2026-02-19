@@ -20,6 +20,7 @@ import {
   getCaseDocumentsArchive,
   updateCase,
   uploadDocuments,
+  getCaseStatus,
   getDocumentChecklist,
   getExtractedFields,
   getFeatureVector,
@@ -122,7 +123,7 @@ const extractApiErrorMessage = (error, fallback = 'Request failed') => {
 const isRetryablePipelineError = (error) => {
   const statusCode = error?.response?.status;
   if (!statusCode) return true;
-  return [408, 429, 500, 502, 503, 504].includes(statusCode);
+  return [408, 409, 429, 500, 502, 503, 504].includes(statusCode);
 };
 
 const waitMs = (ms) => new Promise((resolve) => {
@@ -656,6 +657,25 @@ const CaseDetail = () => {
     },
   });
 
+  const waitForDocumentQueue = async (targetCaseId) => {
+    const maxAttempts = 180; // ~6 minutes
+    let latestStatus = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await getCaseStatus(targetCaseId);
+        latestStatus = response?.data;
+        const jobs = latestStatus?.document_jobs;
+        if (!jobs || jobs.total === 0 || jobs.in_progress === false) {
+          return latestStatus;
+        }
+      } catch (_) {
+        // Continue polling across transient failures.
+      }
+      await waitMs(2000);
+    }
+    return latestStatus;
+  };
+
   const saveManualCibilMutation = useMutation({
     mutationFn: (value) =>
       updateCase(caseId, {
@@ -675,14 +695,33 @@ const CaseDetail = () => {
 
   const reuploadDocumentsMutation = useMutation({
     mutationFn: async (filesToUpload) => {
+      const runStageWithRetry = async (fn) => {
+        try {
+          return await fn();
+        } catch (error) {
+          if (!isRetryablePipelineError(error)) {
+            throw error;
+          }
+          await waitMs(1200);
+          return fn();
+        }
+      };
+
       const formData = new FormData();
       filesToUpload.forEach((file) => {
         formData.append('files', file);
       });
       await uploadDocuments(caseId, formData);
-      await runExtraction(caseId);
-      await runScoring(caseId);
-      await generateReport(caseId);
+      const queueState = await waitForDocumentQueue(caseId);
+      const failedJobs = Number(queueState?.document_jobs?.failed || 0);
+      if (failedJobs > 0) {
+        toast(`Processing finished with ${failedJobs} failed file(s). You can re-upload failed files again.`, {
+          icon: '⚠️',
+        });
+      }
+      await runStageWithRetry(() => runExtraction(caseId));
+      await runStageWithRetry(() => runScoring(caseId));
+      await runStageWithRetry(() => generateReport(caseId));
     },
     onSuccess: () => {
       toast.success('Documents uploaded and pipeline re-run completed.');

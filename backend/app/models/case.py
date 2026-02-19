@@ -48,6 +48,7 @@ class Case(Base):
 
     # Relationships
     documents = relationship("Document", back_populates="case", cascade="all, delete-orphan")
+    document_processing_jobs = relationship("DocumentProcessingJob", back_populates="case", cascade="all, delete-orphan")
     extracted_fields = relationship("ExtractedField", back_populates="case", cascade="all, delete-orphan")
     borrower_features = relationship("BorrowerFeature", back_populates="case", cascade="all, delete-orphan")
 
@@ -80,6 +81,27 @@ class Document(Base):
 
     # Relationships
     case = relationship("Case", back_populates="documents")
+    processing_jobs = relationship("DocumentProcessingJob", back_populates="document", cascade="all, delete-orphan")
+
+
+class DocumentProcessingJob(Base):
+    """Persistent queue jobs for asynchronous OCR and document classification."""
+    __tablename__ = "document_processing_jobs"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    case_id = Column(PGUUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(PGUUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="queued", index=True)  # queued | processing | completed | failed
+    attempts = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=2)
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    case = relationship("Case", back_populates="document_processing_jobs")
+    document = relationship("Document", back_populates="processing_jobs")
 
 
 class ExtractedField(Base):

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
-from app.models.case import Case, Document
+from app.models.case import Case, Document, DocumentProcessingJob
 from app.schemas.shared import ExtractedFieldItem, BorrowerFeatureVector
 from app.core.enums import DocumentType, CaseStatus
 from app.services.stages.stage2_extraction import get_extractor
@@ -57,6 +57,21 @@ async def trigger_extraction(
 
         if not case:
             raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        pending_jobs_query = select(DocumentProcessingJob).where(
+            DocumentProcessingJob.case_id == case.id,
+            DocumentProcessingJob.status.in_(["queued", "processing"]),
+        )
+        pending_jobs_result = await db.execute(pending_jobs_query)
+        pending_jobs = pending_jobs_result.scalars().all()
+        if pending_jobs:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Document processing is still running ({len(pending_jobs)} file(s) pending). "
+                    "Please retry extraction after document jobs complete."
+                ),
+            )
 
         # Load all documents; bank analysis should run even when OCR text is unavailable.
         query = select(Document).where(Document.case_id == case.id)

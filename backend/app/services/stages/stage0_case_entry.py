@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from sqlalchemy.orm import selectinload
 
-from app.models.case import Case, Document
+from app.models.case import Case, Document, DocumentProcessingJob
 from app.schemas.shared import CaseCreate, CaseResponse, CaseUpdate, DocumentResponse
 from app.core.enums import CaseStatus, DocumentStatus
 from app.core.config import settings
@@ -227,8 +227,8 @@ class CaseEntryService:
 
             logger.info(f"Processed file: {file.filename} -> {storage_key}")
 
-            # === AUTO-RUN OCR AND CLASSIFICATION ===
-            await self._run_ocr_and_classification(document, storage_key)
+            # Queue asynchronous OCR/classification job.
+            await self._enqueue_processing_job(case.id, document.id)
 
             return document
 
@@ -459,8 +459,8 @@ class CaseEntryService:
                         documents.append(document)
                         logger.info(f"Extracted from ZIP: {filename}")
 
-                        # Run OCR and classification for this file
-                        await self._run_ocr_and_classification(document, storage_key)
+                        # Queue asynchronous OCR/classification for this file.
+                        await self._enqueue_processing_job(case.id, document.id)
 
                     except Exception as e:
                         logger.error(f"Failed to extract {file_path} from ZIP: {e}")
@@ -476,6 +476,18 @@ class CaseEntryService:
         except Exception as e:
             logger.error(f"Failed to process ZIP file: {e}")
             raise
+
+    async def _enqueue_processing_job(self, case_uuid: UUID, document_uuid: UUID) -> None:
+        """Create a persistent OCR/classification job for worker queue."""
+        job = DocumentProcessingJob(
+            case_id=case_uuid,
+            document_id=document_uuid,
+            status="queued",
+            attempts=0,
+            max_attempts=2,
+        )
+        self.db.add(job)
+        await self.db.flush()
 
     async def get_case(self, case_id: str, user_id: UUID) -> CaseResponse:
         """Get case details by case ID."""

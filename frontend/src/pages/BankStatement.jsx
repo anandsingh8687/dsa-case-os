@@ -8,6 +8,7 @@ import {
   processBankStatements,
   createCase,
   uploadDocuments,
+  getCaseStatus,
   runExtraction,
   runScoring,
   generateReport,
@@ -154,6 +155,43 @@ const BankStatement = () => {
     [files]
   );
 
+  const waitMs = (ms) => new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+
+  const isRetryable = (statusCode) => [408, 409, 429, 500, 502, 503, 504].includes(Number(statusCode));
+
+  const withRetry = async (fn) => {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!isRetryable(error?.response?.status)) {
+        throw error;
+      }
+      await waitMs(1200);
+      return fn();
+    }
+  };
+
+  const waitForDocumentQueue = async (targetCaseId) => {
+    const maxAttempts = 180;
+    let latest = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await getCaseStatus(targetCaseId);
+        latest = response?.data;
+        const jobs = latest?.document_jobs;
+        if (!jobs || jobs.total === 0 || jobs.in_progress === false) {
+          return latest;
+        }
+      } catch (_) {
+        // keep polling
+      }
+      await waitMs(2000);
+    }
+    return latest;
+  };
+
   const convertToCaseMutation = useMutation({
     mutationFn: async () => {
       const borrowerName = convertInput.borrower_name.trim();
@@ -183,11 +221,23 @@ const BankStatement = () => {
 
       await uploadDocuments(newCaseId, formData);
 
-      // Fire downstream processing in background; conversion should stay fast for DSA workflow.
-      void runExtraction(newCaseId)
-        .then(() => runScoring(newCaseId))
-        .then(() => generateReport(newCaseId))
-        .catch(() => null);
+      // Fire downstream processing in background after async document queue completes.
+      void (async () => {
+        const queueState = await waitForDocumentQueue(newCaseId);
+        const failedJobs = Number(queueState?.document_jobs?.failed || 0);
+        if (failedJobs > 0) {
+          toast(`Document processing finished with ${failedJobs} failed file(s).`, {
+            icon: '⚠️',
+          });
+        }
+        try {
+          await withRetry(() => runExtraction(newCaseId));
+          await withRetry(() => runScoring(newCaseId));
+          await withRetry(() => generateReport(newCaseId));
+        } catch (_) {
+          // User can continue from case workspace if background run fails.
+        }
+      })();
 
       return {
         caseId: newCaseId,

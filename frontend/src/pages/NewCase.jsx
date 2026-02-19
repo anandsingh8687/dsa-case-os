@@ -35,7 +35,7 @@ const PROGRAM_OPTIONS = [
 ];
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const isRetryableStatusCode = (statusCode) => [408, 429, 500, 502, 503, 504].includes(Number(statusCode));
+const isRetryableStatusCode = (statusCode) => [408, 409, 429, 500, 502, 503, 504].includes(Number(statusCode));
 
 const getBorrowerNameFromGst = (gstPayload) => {
   if (!gstPayload || typeof gstPayload !== 'object') return '';
@@ -109,6 +109,24 @@ const NewCase = () => {
     };
 
     try {
+      const queueState = await waitForDocumentJobs(targetCaseId);
+      await checkForGSTData(targetCaseId);
+
+      if (!queueState) {
+        toast('Documents are still processing. Open the case from dashboard and run pipeline once processing reaches 100%.', {
+          icon: 'ℹ️',
+        });
+        return;
+      }
+
+      const failedJobs = Number(queueState?.document_jobs?.failed || 0);
+      if (failedJobs > 0) {
+        toast(`Document processing finished with ${failedJobs} failed file(s). You can re-upload those files from case workspace.`, {
+          icon: '⚠️',
+        });
+      }
+
+      setUploadPhase('finishing');
       await withRetry(() => runExtraction(targetCaseId));
       await withRetry(() => runScoring(targetCaseId));
       await withRetry(() => generateReport(targetCaseId));
@@ -151,22 +169,27 @@ const NewCase = () => {
     );
   };
 
-  const waitForProcessing = async (targetCaseId) => {
-    const maxAttempts = 5; // quick readiness check (~5 seconds)
+  const waitForDocumentJobs = async (targetCaseId) => {
+    const maxAttempts = 180; // ~6 minutes with 2-second polling
+    let latestData = null;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         const response = await getCaseStatus(targetCaseId);
-        const statusValue = response?.data?.status;
-        if (statusValue && statusValue !== 'created') {
-          return statusValue;
+        latestData = response?.data;
+        const jobs = response?.data?.document_jobs;
+        if (jobs && typeof jobs.completion_pct === 'number') {
+          setUploadProgress(Math.min(100, jobs.completion_pct));
+        }
+        if (!jobs || jobs.total === 0 || jobs.in_progress === false) {
+          return latestData;
         }
       } catch (error) {
         // Keep polling even if one attempt fails.
       }
-      await wait(1000);
+      await wait(2000);
     }
-    return null;
+    return latestData;
   };
 
   const uploadMutation = useMutation({
@@ -195,19 +218,10 @@ const NewCase = () => {
         },
       }),
     onSuccess: async (_response, variables) => {
-      toast.success('Documents uploaded successfully! Processing...');
+      toast.success('Documents uploaded. Background processing has started.');
       setUploadProgress(100);
-      setUploadPhase('finishing');
+      setUploadPhase('server_processing');
       setFileProgress((prev) => prev.map((entry) => ({ ...entry, progress: 100 })));
-
-      const finalStatus = await waitForProcessing(variables.caseId);
-      await checkForGSTData(variables.caseId);
-
-      if (!finalStatus) {
-        toast('Upload is complete. Processing continues in the background.', {
-          icon: '⏳',
-        });
-      }
 
       if (workflowMode === 'docs-first') {
         setStep(2);
@@ -215,7 +229,7 @@ const NewCase = () => {
         setStep(3);
       }
 
-      // Trigger downstream stages in background so users don't need manual runs.
+      // Trigger downstream stages only after async OCR/classification queue is done.
       void runPostUploadPipeline(variables.caseId);
     },
     onError: (error) => {

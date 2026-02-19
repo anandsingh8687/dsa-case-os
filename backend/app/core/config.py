@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "https://api.moonshot.ai/v1"
     COPILOT_FAST_MODEL: str = os.getenv("COPILOT_FAST_MODEL", "moonshot-v1-8k")
 
+    # Async document processing worker queue
+    DOC_QUEUE_ENABLED: bool = os.getenv("DOC_QUEUE_ENABLED", "true").lower() == "true"
+    DOC_QUEUE_WORKER_CONCURRENCY: int = int(os.getenv("DOC_QUEUE_WORKER_CONCURRENCY", "3"))
+    DOC_QUEUE_POLL_INTERVAL_MS: int = int(os.getenv("DOC_QUEUE_POLL_INTERVAL_MS", "750"))
+
     # WhatsApp Service
     WHATSAPP_SERVICE_URL: str = os.getenv("WHATSAPP_SERVICE_URL", "http://localhost:3001")
 
