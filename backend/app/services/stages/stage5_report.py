@@ -7,6 +7,7 @@ This is the PRIMARY PAID DELIVERABLE for DSAs.
 """
 
 import logging
+import asyncio
 from typing import List, Optional, Tuple
 from uuid import UUID
 from datetime import datetime
@@ -24,7 +25,7 @@ from app.db.database import get_db_session
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
-LLM_STRATEGY_TIMEOUT_SECONDS = 8.0
+LLM_STRATEGY_TIMEOUT_SECONDS = 6.0
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -425,6 +426,7 @@ async def generate_submission_strategy(
             api_key=settings.LLM_API_KEY,
             base_url=settings.LLM_BASE_URL,
             timeout=LLM_STRATEGY_TIMEOUT_SECONDS,
+            max_retries=0,
         )
 
         # Build borrower story elements
@@ -470,21 +472,24 @@ If there are any profile weaknesses, address them proactively. Turn them into op
 - Keep professional but conversational tone
 - Total length: 250-350 words (3-4 rich paragraphs)"""
 
-        response = await client.chat.completions.create(
-            model=settings.LLM_MODEL,
-            max_tokens=550,
-            # Kimi 2.5 on this deployment currently accepts only temperature=1.
-            temperature=1.0,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a seasoned business loan strategist with 15+ years of experience. You craft compelling, story-driven submission plans that combine data-driven insights with strategic storytelling. Your narratives build confidence, provide clarity, and turn complex eligibility analysis into actionable wisdom."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
+        response = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=settings.LLM_MODEL,
+                max_tokens=550,
+                # Kimi 2.5 on this deployment currently accepts only temperature=1.
+                temperature=1.0,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a seasoned business loan strategist with 15+ years of experience. You craft compelling, story-driven submission plans that combine data-driven insights with strategic storytelling. Your narratives build confidence, provide clarity, and turn complex eligibility analysis into actionable wisdom."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
+            ),
+            timeout=LLM_STRATEGY_TIMEOUT_SECONDS,
         )
 
         narrative = response.choices[0].message.content.strip()
