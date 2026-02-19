@@ -48,18 +48,15 @@ async def trigger_extraction(
         if not case:
             raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
 
-        # Get all documents with OCR text
-        query = select(Document).where(
-            Document.case_id == case.id,
-            Document.ocr_text.isnot(None)
-        )
+        # Load all documents; bank analysis should run even when OCR text is unavailable.
+        query = select(Document).where(Document.case_id == case.id)
         result = await db.execute(query)
         documents = result.scalars().all()
 
         if not documents:
             raise HTTPException(
                 status_code=400,
-                detail="No documents with OCR text found for this case"
+                detail="No documents found for this case"
             )
 
         # Extract fields from each document
@@ -73,11 +70,29 @@ async def trigger_extraction(
 
         for doc in documents:
             try:
+                if not doc.doc_type:
+                    extraction_summary.append({
+                        "document_id": str(doc.id),
+                        "doc_type": "unknown",
+                        "fields_extracted": 0,
+                        "note": "Document type unavailable",
+                    })
+                    continue
+
                 doc_type = DocumentType(doc.doc_type)
 
                 # Collect bank statement documents for separate analysis
                 if doc_type == DocumentType.BANK_STATEMENT:
                     bank_statement_docs.append(doc)
+                    continue
+
+                if not doc.ocr_text:
+                    extraction_summary.append({
+                        "document_id": str(doc.id),
+                        "doc_type": doc.doc_type,
+                        "fields_extracted": 0,
+                        "note": "No OCR text available for field extraction",
+                    })
                     continue
 
                 fields = await extractor.extract_fields(doc.ocr_text, doc_type)

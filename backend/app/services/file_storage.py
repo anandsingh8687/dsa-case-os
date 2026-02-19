@@ -2,6 +2,7 @@
 import os
 import hashlib
 import shutil
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import BinaryIO, Optional
@@ -86,6 +87,64 @@ class LocalFileStorage(FileStorageBackend):
         self.base_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"Initialized local file storage at: {self.base_path}")
 
+    def _resolve_existing_path(self, storage_key: str) -> Optional[Path]:
+        """Resolve storage keys across legacy/relative/absolute formats."""
+        if not storage_key:
+            return None
+
+        raw = str(storage_key).strip()
+        if not raw:
+            return None
+
+        normalized = raw.replace("\\", "/")
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+
+        candidate_paths = []
+        seen = set()
+
+        def add(path: Path):
+            key = str(path)
+            if key in seen:
+                return
+            seen.add(key)
+            candidate_paths.append(path)
+
+        raw_path = Path(raw)
+        if raw_path.is_absolute():
+            add(raw_path)
+
+        norm_path = Path(normalized)
+        if norm_path.is_absolute():
+            add(norm_path)
+        elif norm_path.exists():
+            add(norm_path)
+
+        add(self.base_path / normalized)
+        if raw != normalized:
+            add(self.base_path / raw)
+
+        base_name = self.base_path.name
+        if normalized.startswith(f"{base_name}/"):
+            add(self.base_path / normalized[len(base_name) + 1 :])
+        if normalized.startswith("uploads/"):
+            add(self.base_path / normalized[len("uploads/") :])
+        if "/uploads/" in normalized:
+            add(self.base_path / normalized.split("/uploads/", 1)[1])
+
+        case_match = re.search(r"(CASE-\d{8}-\d{4}/.+)$", normalized, flags=re.IGNORECASE)
+        if case_match:
+            add(self.base_path / case_match.group(1))
+
+        for path in candidate_paths:
+            try:
+                if path.exists() and path.is_file():
+                    return path
+            except OSError:
+                continue
+
+        return None
+
     async def store_file(
         self,
         file_data: BinaryIO,
@@ -136,9 +195,8 @@ class LocalFileStorage(FileStorageBackend):
 
     async def get_file(self, storage_key: str) -> Optional[bytes]:
         """Retrieve file data by storage key."""
-        file_path = self.base_path / storage_key
-
-        if not file_path.exists():
+        file_path = self._resolve_existing_path(storage_key)
+        if not file_path:
             logger.warning(f"File not found: {storage_key}")
             return None
 
@@ -175,13 +233,11 @@ class LocalFileStorage(FileStorageBackend):
 
     async def file_exists(self, storage_key: str) -> bool:
         """Check if a file exists."""
-        file_path = self.base_path / storage_key
-        return file_path.exists()
+        return self._resolve_existing_path(storage_key) is not None
 
     def get_file_path(self, storage_key: str) -> Optional[Path]:
         """Get the actual file path."""
-        file_path = self.base_path / storage_key
-        return file_path if file_path.exists() else None
+        return self._resolve_existing_path(storage_key)
 
 
 class S3FileStorage(FileStorageBackend):

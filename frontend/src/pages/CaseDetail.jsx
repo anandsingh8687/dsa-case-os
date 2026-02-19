@@ -68,6 +68,8 @@ const normalizeEmailText = (value) => {
     .trim();
 };
 
+const normalizeToken = (value) => String(value || '').trim().toLowerCase();
+
 const PRODUCT_NAME_OPTIONS = [
   'BL',
   'STBL',
@@ -278,11 +280,9 @@ const CaseDetail = () => {
   const [emiLoanAmountLakhs, setEmiLoanAmountLakhs] = useState(10);
   const [emiTenureMonths, setEmiTenureMonths] = useState(36);
   const [rpsPreview, setRpsPreview] = useState(null);
-  const [emailLenderKey, setEmailLenderKey] = useState('');
+  const [lenderNameInput, setLenderNameInput] = useState('');
+  const [productNameInput, setProductNameInput] = useState('');
   const [rmEmail, setRmEmail] = useState('');
-  const [useCustomLender, setUseCustomLender] = useState(false);
-  const [customLenderName, setCustomLenderName] = useState('');
-  const [customProductName, setCustomProductName] = useState('');
   const [reuploadFiles, setReuploadFiles] = useState([]);
   const [documentPreview, setDocumentPreview] = useState(null);
 
@@ -437,6 +437,19 @@ const CaseDetail = () => {
 
   const caseInfo = caseData?.data;
   const documents = Array.isArray(documentsData?.data) ? documentsData.data : [];
+  const sortedDocuments = useMemo(() => {
+    const known = [];
+    const unknown = [];
+    documents.forEach((doc) => {
+      const docType = normalizeToken(doc?.doc_type);
+      if (!docType || docType === 'unknown') {
+        unknown.push(doc);
+      } else {
+        known.push(doc);
+      }
+    });
+    return [...known, ...unknown];
+  }, [documents]);
   const checklist = checklistData?.data || {};
   const features = featuresData?.data || {};
   const eligibility = eligibilityData?.data || {};
@@ -469,49 +482,88 @@ const CaseDetail = () => {
     const dobValues = extractedFields
       .filter((field) => field.field_name === 'dob' && field.field_value)
       .map((field) => String(field.field_value).trim());
+    const applicantMap = new Map();
 
-    const maxLen = Math.max(panValues.length, aadhaarValues.length, nameValues.length, dobValues.length);
-    const applicants = [];
-    for (let idx = 0; idx < maxLen; idx += 1) {
-      const pan = panValues[idx] || '';
-      const aadhaar = aadhaarValues[idx] || '';
-      const fullName = nameValues[idx] || '';
-      const dob = dobValues[idx] || '';
-      if (!pan && !aadhaar && !fullName) continue;
-
-      const isPrimary =
-        (pan && primaryPan && pan === primaryPan) ||
-        (aadhaar && primaryAadhaar && aadhaar === primaryAadhaar) ||
-        (fullName && primaryName && fullName.toLowerCase() === primaryName);
-      if (!isPrimary) {
-        applicants.push({
-          full_name: fullName || 'Co-applicant',
-          pan_number: pan || null,
-          aadhaar_number: aadhaar || null,
-          dob: dob || null,
+    const ensureApplicant = (key) => {
+      if (!applicantMap.has(key)) {
+        applicantMap.set(key, {
+          full_name: '',
+          pan_number: null,
+          aadhaar_number: null,
+          dob: null,
         });
       }
-    }
+      return applicantMap.get(key);
+    };
 
-    const deduped = [];
-    const seen = new Set();
-    applicants.forEach((item) => {
-      const key = `${item.pan_number || ''}|${item.aadhaar_number || ''}|${item.full_name || ''}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      deduped.push(item);
+    panValues.forEach((pan) => {
+      if (!pan || (primaryPan && pan === primaryPan)) return;
+      const applicant = ensureApplicant(`pan:${pan}`);
+      applicant.pan_number = pan;
     });
 
-    return deduped.slice(0, 4);
+    aadhaarValues.forEach((aadhaar) => {
+      if (!aadhaar || (primaryAadhaar && aadhaar === primaryAadhaar)) return;
+      const existing = Array.from(applicantMap.values()).find((item) => !item.aadhaar_number);
+      if (existing) {
+        existing.aadhaar_number = aadhaar;
+      } else {
+        const applicant = ensureApplicant(`aadhaar:${aadhaar}`);
+        applicant.aadhaar_number = aadhaar;
+      }
+    });
+
+    const validNames = nameValues
+      .map((name) => name.trim())
+      .filter((name) => name.length >= 3)
+      .filter((name) => !/\d{4,}/.test(name))
+      .filter((name) => name.toLowerCase() !== primaryName);
+    validNames.forEach((name) => {
+      const existing = Array.from(applicantMap.values()).find((item) => !item.full_name);
+      if (existing) {
+        existing.full_name = name;
+      }
+    });
+
+    dobValues.forEach((dob) => {
+      const existing = Array.from(applicantMap.values()).find((item) => !item.dob);
+      if (existing) {
+        existing.dob = dob;
+      }
+    });
+
+    return Array.from(applicantMap.values())
+      .filter((item) => item.pan_number || item.aadhaar_number)
+      .map((item) => ({
+        full_name: item.full_name || 'Co-applicant',
+        pan_number: item.pan_number,
+        aadhaar_number: item.aadhaar_number,
+        dob: item.dob,
+      }))
+      .slice(0, 4);
   }, [extractedFields, features?.aadhaar_number, features?.full_name, features?.pan_number]);
   const annualTurnoverLakhs = features?.annual_turnover;
   const monthlyTurnoverAmount = features?.monthly_turnover ?? features?.monthly_credit_avg;
   const avgMonthlyBalance = features?.avg_monthly_balance;
   const monthlyCreditAvg = features?.monthly_credit_avg;
   const monthlyEmiOutflow = features?.emi_outflow_monthly;
-  const selectedEmailLender = allEligibilityResults.find(
-    (item) => `${item.lender_name}::${item.product_name}` === emailLenderKey
+  const selectedEmailLender = allEligibilityResults.find((item) => (
+    normalizeToken(item.lender_name) === normalizeToken(lenderNameInput)
+      && normalizeToken(item.product_name) === normalizeToken(productNameInput)
+  )) || allEligibilityResults.find(
+    (item) => normalizeToken(item.lender_name) === normalizeToken(lenderNameInput)
   ) || null;
+  const lenderNameSuggestions = useMemo(
+    () => Array.from(new Set(allEligibilityResults.map((item) => item.lender_name).filter(Boolean))),
+    [allEligibilityResults]
+  );
+  const productNameSuggestions = useMemo(
+    () => Array.from(new Set([
+      ...PRODUCT_NAME_OPTIONS,
+      ...allEligibilityResults.map((item) => item.product_name).filter(Boolean),
+    ])),
+    [allEligibilityResults]
+  );
   const selectedLenderSignals = buildMatchedSignalsForModal(selectedLender, features);
   const docFramework =
     DOCUMENTATION_FRAMEWORK_2026[selectedProgram] || DOCUMENTATION_FRAMEWORK_2026.banking;
@@ -610,11 +662,12 @@ const CaseDetail = () => {
 
   useEffect(() => {
     if (!allEligibilityResults.length) return;
-    if (!emailLenderKey) {
+    if (!lenderNameInput) {
       const first = allEligibilityResults[0];
-      setEmailLenderKey(`${first.lender_name}::${first.product_name}`);
+      setLenderNameInput(first.lender_name || '');
+      setProductNameInput(first.product_name || '');
     }
-  }, [allEligibilityResults, emailLenderKey]);
+  }, [allEligibilityResults, lenderNameInput]);
 
   useEffect(() => () => {
     if (documentPreview?.url) {
@@ -631,15 +684,11 @@ const CaseDetail = () => {
   ];
 
   const openMailtoDraft = async (prepareZipFirst = false) => {
-    const lenderName = useCustomLender
-      ? customLenderName.trim()
-      : selectedEmailLender?.lender_name;
-    const productName = useCustomLender
-      ? (customProductName.trim() || 'Business Loan')
-      : selectedEmailLender?.product_name;
+    const lenderName = lenderNameInput.trim();
+    const productName = productNameInput.trim() || selectedEmailLender?.product_name || 'Business Loan';
 
     if (!lenderName) {
-      toast.error('Select a lender or enter lender name');
+      toast.error('Enter lender name');
       return;
     }
     if (!rmEmail) {
@@ -835,7 +884,7 @@ const CaseDetail = () => {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {documents.map((doc) => (
+                  {sortedDocuments.map((doc) => (
                     <tr key={doc.id}>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                         <button
@@ -849,7 +898,9 @@ const CaseDetail = () => {
                         </button>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <Badge variant="info">{doc.doc_type || 'Unknown'}</Badge>
+                        <Badge variant={normalizeToken(doc.doc_type) === 'unknown' ? 'danger' : 'info'}>
+                          {doc.doc_type || 'Unknown'}
+                        </Badge>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {formatPercentage(doc.classification_confidence)}
@@ -1668,72 +1719,40 @@ const CaseDetail = () => {
 
                 <div className="p-4 rounded-lg border border-gray-200 bg-white">
                     <h4 className="font-semibold mb-3">Email Collaboration (Lender RM)</h4>
-                    <div className="mb-3 flex items-center gap-2">
-                      <input
-                        id="custom-lender-toggle"
-                        type="checkbox"
-                        checked={useCustomLender}
-                        onChange={(e) => setUseCustomLender(e.target.checked)}
-                        className="h-4 w-4"
-                      />
-                      <label htmlFor="custom-lender-toggle" className="text-sm text-gray-700">
-                        Use my own lender
-                      </label>
-                    </div>
-
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      {!useCustomLender ? (
-                        <div className="md:col-span-1">
-                          <label className="block text-xs text-gray-600 mb-1">Select Lender</label>
-                          <select
-                            value={emailLenderKey}
-                            onChange={(e) => setEmailLenderKey(e.target.value)}
-                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                            disabled={allEligibilityResults.length === 0}
-                          >
-                            {allEligibilityResults.length === 0 && (
-                              <option value="">No evaluated lenders available</option>
-                            )}
-                            {allEligibilityResults.map((lender) => (
-                              <option
-                                key={`mail-lender-${lender.lender_name}-${lender.product_name}-${lender.hard_filter_status}`}
-                                value={`${lender.lender_name}::${lender.product_name}`}
-                              >
-                                {lender.lender_name} • {lender.product_name} ({String(lender.hard_filter_status || '').toUpperCase()})
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="md:col-span-1">
-                            <label className="block text-xs text-gray-600 mb-1">Lender Name</label>
-                            <input
-                              type="text"
-                              value={customLenderName}
-                              onChange={(e) => setCustomLenderName(e.target.value)}
-                              placeholder="e.g., HDFC Bank"
-                              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                            />
-                          </div>
-                          <div className="md:col-span-1">
-                            <label className="block text-xs text-gray-600 mb-1">Product Name</label>
-                            <input
-                              type="text"
-                              list="custom-product-options"
-                              value={customProductName}
-                              onChange={(e) => setCustomProductName(e.target.value)}
-                              placeholder="e.g., BL / LAP / STBL"
-                              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                            />
-                            <datalist id="custom-product-options">
-                              {PRODUCT_NAME_OPTIONS.map((product) => (
-                                <option key={`product-opt-${product}`} value={product} />
-                              ))}
-                            </datalist>
-                          </div>
-                        </>
-                      )}
+                      <div className="md:col-span-1">
+                        <label className="block text-xs text-gray-600 mb-1">Lender Name</label>
+                        <input
+                          type="text"
+                          list="lender-name-options"
+                          value={lenderNameInput}
+                          onChange={(e) => setLenderNameInput(e.target.value)}
+                          placeholder="e.g., Bajaj / HDFC / Arthmate"
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                        />
+                        <datalist id="lender-name-options">
+                          {lenderNameSuggestions.map((name) => (
+                            <option key={`lender-opt-${name}`} value={name} />
+                          ))}
+                        </datalist>
+                      </div>
+
+                      <div className="md:col-span-1">
+                        <label className="block text-xs text-gray-600 mb-1">Product Name</label>
+                        <input
+                          type="text"
+                          list="product-name-options"
+                          value={productNameInput}
+                          onChange={(e) => setProductNameInput(e.target.value)}
+                          placeholder="e.g., BL / STBL / HTBL"
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                        />
+                        <datalist id="product-name-options">
+                          {productNameSuggestions.map((product) => (
+                            <option key={`product-opt-${product}`} value={product} />
+                          ))}
+                        </datalist>
+                      </div>
 
                       <div className="md:col-span-1">
                         <label className="block text-xs text-gray-600 mb-1">RM Email</label>

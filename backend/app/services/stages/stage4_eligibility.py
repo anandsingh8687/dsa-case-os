@@ -37,6 +37,110 @@ ENTITY_EQUIVALENCE_MAP = {
     "huf": {"huf"},
 }
 
+PRODUCT_TERMS_FALLBACKS = {
+    "bl": {
+        "interest_rate_range": "14% - 30%",
+        "processing_fee_pct": 2.0,
+        "expected_tat_days": 5,
+        "tenor_min_months": 12,
+        "tenor_max_months": 48,
+    },
+    "stbl": {
+        "interest_rate_range": "13% - 26%",
+        "processing_fee_pct": 1.5,
+        "expected_tat_days": 4,
+        "tenor_min_months": 12,
+        "tenor_max_months": 60,
+    },
+    "sbl": {
+        "interest_rate_range": "15% - 28%",
+        "processing_fee_pct": 2.0,
+        "expected_tat_days": 4,
+        "tenor_min_months": 12,
+        "tenor_max_months": 60,
+    },
+    "mtbl": {
+        "interest_rate_range": "15% - 30%",
+        "processing_fee_pct": 2.5,
+        "expected_tat_days": 5,
+        "tenor_min_months": 12,
+        "tenor_max_months": 60,
+    },
+    "htbl": {
+        "interest_rate_range": "10% - 16%",
+        "processing_fee_pct": 1.0,
+        "expected_tat_days": 7,
+        "tenor_min_months": 60,
+        "tenor_max_months": 300,
+    },
+    "pl": {
+        "interest_rate_range": "11% - 28%",
+        "processing_fee_pct": 2.0,
+        "expected_tat_days": 3,
+        "tenor_min_months": 12,
+        "tenor_max_months": 60,
+    },
+    "hl": {
+        "interest_rate_range": "8.5% - 11.5%",
+        "processing_fee_pct": 0.5,
+        "expected_tat_days": 10,
+        "tenor_min_months": 60,
+        "tenor_max_months": 360,
+    },
+    "lap": {
+        "interest_rate_range": "10.5% - 16%",
+        "processing_fee_pct": 1.0,
+        "expected_tat_days": 8,
+        "tenor_min_months": 36,
+        "tenor_max_months": 180,
+    },
+    "od": {
+        "interest_rate_range": "11% - 18%",
+        "processing_fee_pct": 1.0,
+        "expected_tat_days": 3,
+        "tenor_min_months": 12,
+        "tenor_max_months": 36,
+    },
+    "cc": {
+        "interest_rate_range": "11% - 17%",
+        "processing_fee_pct": 1.0,
+        "expected_tat_days": 3,
+        "tenor_min_months": 12,
+        "tenor_max_months": 36,
+    },
+    "digital": {
+        "interest_rate_range": "16% - 36%",
+        "processing_fee_pct": 2.5,
+        "expected_tat_days": 2,
+        "tenor_min_months": 3,
+        "tenor_max_months": 36,
+    },
+    "default": {
+        "interest_rate_range": "12% - 24%",
+        "processing_fee_pct": 1.5,
+        "expected_tat_days": 5,
+        "tenor_min_months": 12,
+        "tenor_max_months": 60,
+    },
+}
+
+LENDER_TERMS_OVERRIDES = {
+    "arthmate": {"interest_rate_range": "18% - 30%", "processing_fee_pct": 2.5, "expected_tat_days": 3},
+    "abfl": {"interest_rate_range": "14% - 26%", "processing_fee_pct": 2.0, "expected_tat_days": 5},
+    "bajaj": {"interest_rate_range": "13% - 30%", "processing_fee_pct": 2.0, "expected_tat_days": 3},
+    "clix": {"interest_rate_range": "14% - 30%", "processing_fee_pct": 2.5, "expected_tat_days": 4},
+    "credit saison": {"interest_rate_range": "16% - 28%", "processing_fee_pct": 2.0, "expected_tat_days": 5},
+    "godrej": {"interest_rate_range": "13% - 24%", "processing_fee_pct": 1.5, "expected_tat_days": 4},
+    "iifl": {"interest_rate_range": "14% - 28%", "processing_fee_pct": 2.0, "expected_tat_days": 4},
+    "indifi": {"interest_rate_range": "16% - 30%", "processing_fee_pct": 2.5, "expected_tat_days": 3},
+    "lendingkart": {"interest_rate_range": "18% - 36%", "processing_fee_pct": 2.5, "expected_tat_days": 2},
+    "neogrowth": {"interest_rate_range": "16% - 30%", "processing_fee_pct": 2.5, "expected_tat_days": 2},
+    "protium": {"interest_rate_range": "14% - 28%", "processing_fee_pct": 2.0, "expected_tat_days": 4},
+    "tata": {"interest_rate_range": "12% - 28%", "processing_fee_pct": 2.0, "expected_tat_days": 3},
+    "ambit": {"interest_rate_range": "14% - 26%", "processing_fee_pct": 2.0, "expected_tat_days": 5},
+    "flexiloans": {"interest_rate_range": "18% - 34%", "processing_fee_pct": 2.5, "expected_tat_days": 2},
+}
+
 
 def _normalize_entity_value(value: Optional[str]) -> str:
     if value is None:
@@ -58,6 +162,66 @@ def _entity_variants(value: Optional[str]) -> set[str]:
             variants.add(canonical)
             variants.update(aliases)
     return variants
+
+
+def _resolve_product_terms_bucket(product_name: Optional[str]) -> str:
+    normalized = (product_name or "").strip().lower()
+    for key in (
+        "stbl",
+        "htbl",
+        "mtbl",
+        "sbl",
+        "bl",
+        "pl",
+        "hl",
+        "lap",
+        "od",
+        "cc",
+        "digital",
+    ):
+        if key in normalized:
+            return key
+    return "default"
+
+
+def _build_lender_terms(
+    lender_name: Optional[str],
+    product_name: Optional[str],
+    existing_terms: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Fill lender terms with resilient fallback values when policy columns are sparse."""
+    terms = dict(existing_terms or {})
+    product_terms = PRODUCT_TERMS_FALLBACKS.get(
+        _resolve_product_terms_bucket(product_name),
+        PRODUCT_TERMS_FALLBACKS["default"],
+    )
+
+    lender_key = (lender_name or "").strip().lower()
+    lender_overrides: Dict[str, Any] = {}
+    for token, value in LENDER_TERMS_OVERRIDES.items():
+        if token in lender_key:
+            lender_overrides = value
+            break
+
+    if not terms.get("interest_rate_range"):
+        terms["interest_rate_range"] = lender_overrides.get("interest_rate_range") or product_terms["interest_rate_range"]
+    if terms.get("processing_fee_pct") is None:
+        terms["processing_fee_pct"] = lender_overrides.get("processing_fee_pct", product_terms["processing_fee_pct"])
+    if terms.get("expected_tat_days") is None:
+        terms["expected_tat_days"] = lender_overrides.get("expected_tat_days", product_terms["expected_tat_days"])
+
+    min_tenor = terms.get("tenor_min_months")
+    max_tenor = terms.get("tenor_max_months")
+    if min_tenor is None:
+        min_tenor = product_terms["tenor_min_months"]
+    if max_tenor is None:
+        max_tenor = product_terms["tenor_max_months"]
+    if min_tenor and max_tenor and min_tenor > max_tenor:
+        min_tenor, max_tenor = max_tenor, min_tenor
+
+    terms["tenor_min_months"] = min_tenor
+    terms["tenor_max_months"] = max_tenor
+    return terms
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -665,11 +829,17 @@ async def score_case_eligibility(
                         "min_abb": lender.min_abb,
                     },
                     "lender_terms": {
-                        "interest_rate_range": lender.interest_rate_range,
-                        "processing_fee_pct": lender.processing_fee_pct,
-                        "expected_tat_days": lender.expected_tat_days,
-                        "tenor_min_months": lender.tenor_min_months,
-                        "tenor_max_months": lender.tenor_max_months,
+                        **_build_lender_terms(
+                            lender_name=lender.lender_name,
+                            product_name=lender.product_name,
+                            existing_terms={
+                                "interest_rate_range": lender.interest_rate_range,
+                                "processing_fee_pct": lender.processing_fee_pct,
+                                "expected_tat_days": lender.expected_tat_days,
+                                "tenor_min_months": lender.tenor_min_months,
+                                "tenor_max_months": lender.tenor_max_months,
+                            },
+                        )
                     },
                 },
                 eligibility_score=score,
@@ -1009,6 +1179,11 @@ def _normalize_pass_result_details(
         details["lender_thresholds"] = {}
     if not isinstance(details.get("lender_terms"), dict):
         details["lender_terms"] = {}
+    details["lender_terms"] = _build_lender_terms(
+        lender_name=result.lender_name,
+        product_name=result.product_name,
+        existing_terms=details.get("lender_terms"),
+    )
 
     result.hard_filter_details = details
     return result

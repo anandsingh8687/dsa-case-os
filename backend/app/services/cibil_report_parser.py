@@ -23,7 +23,7 @@ def _to_number(value: str) -> Optional[float]:
 
 
 def _parse_date(value: str) -> Optional[date]:
-    for fmt in ("%d/%m/%Y", "%d-%m-%Y"):
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y"):
         try:
             return datetime.strptime(value.strip(), fmt).date()
         except ValueError:
@@ -129,6 +129,10 @@ class CibilReportParser:
             r"Overdue\s+Payments\s+(\d+)",
             r"No\.?\s*of\s*Accounts?\s*with\s*Overdue\s*[:\-]?\s*(\d+)",
             r"Accounts?\s+With\s+Overdue\s*[:\-]?\s*(\d+)",
+            r"No\.?\s*of\s*Overdue\s+Accounts?\s*[:\-]?\s*(\d+)",
+            r"Total\s+Overdue\s+Accounts?\s*[:\-]?\s*(\d+)",
+            r"Overdue\s+Account\s+Count\s*[:\-]?\s*(\d+)",
+            r"Delinquent\s+Accounts?\s*[:\-]?\s*(\d+)",
         ]
         for pattern in patterns:
             match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -159,6 +163,10 @@ class CibilReportParser:
             r"Enquiries\s+in\s+last\s+(?:3|6)\s+months?\s*[:\-]?\s*(\d{1,3})\b",
             r"Total\s+Enquiries\s*\(?(?:last\s+6\s+months?)\)?\s*[:\-]?\s*(\d{1,3})\b",
             r"Enquiries\s*\(6M\)\s*[:\-]?\s*(\d{1,3})\b",
+            r"Number\s+of\s+Enquiries\s+in\s+Last\s+6\s+Months\s*[:\-]?\s*(\d{1,3})\b",
+            r"Enquiries\s+Last\s+6\s+Months\s*[:\-]?\s*(\d{1,3})\b",
+            r"Credit\s+Enquiries\s*\(Last\s+6\s+Months\)\s*[:\-]?\s*(\d{1,3})\b",
+            r"Total\s+Credit\s+Enquiries\s*[:\-]?\s*(\d{1,3})\b",
         ]
         for pattern in summary_patterns:
             summary = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
