@@ -1,7 +1,8 @@
 """Case management API endpoints."""
 import io
+import mimetypes
 import zipfile
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 from pathlib import Path
 
@@ -25,6 +26,26 @@ from app.services.stages.stage0_case_entry import CaseEntryService
 from app.services.stages.stage1_checklist import ChecklistEngine
 
 router = APIRouter(prefix="/cases", tags=["cases"])
+
+
+async def _read_document_bytes(service: CaseEntryService, storage_key: str) -> Optional[bytes]:
+    """Read document bytes from configured storage with safe fallbacks."""
+    if not storage_key:
+        return None
+
+    file_content = await service.storage.get_file(storage_key)
+    if file_content:
+        return file_content
+
+    file_path = service.storage.get_file_path(storage_key)
+    if file_path and file_path.exists():
+        return file_path.read_bytes()
+
+    raw_path = Path(storage_key)
+    if raw_path.is_absolute() and raw_path.exists():
+        return raw_path.read_bytes()
+
+    return None
 
 
 @router.post("/", response_model=CaseResponse, status_code=status.HTTP_201_CREATED)
@@ -234,7 +255,7 @@ async def download_case_documents_archive(
         for doc in case.documents:
             if not doc.storage_key:
                 continue
-            file_content = await service.storage.get_file(doc.storage_key)
+            file_content = await _read_document_bytes(service, doc.storage_key)
             if not file_content:
                 continue
 
@@ -252,11 +273,12 @@ async def download_case_documents_archive(
             archive.writestr(archive_name, file_content)
             added_files += 1
 
-    if added_files == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No readable files found to archive"
-        )
+        if added_files == 0:
+            archive.writestr(
+                "README.txt",
+                "No readable files were found for this case at download time. "
+                "Please re-upload the latest documents and try again.",
+            )
 
     archive_buffer.seek(0)
     return StreamingResponse(
@@ -264,6 +286,43 @@ async def download_case_documents_archive(
         media_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="{case_id}_documents.zip"'
+        }
+    )
+
+
+@router.get("/{case_id}/documents/{document_id}/preview")
+async def preview_case_document(
+    case_id: str,
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Preview/download one case document in-browser."""
+    service = CaseEntryService(db)
+    case = await service._get_case_by_case_id(case_id, current_user.id)
+
+    target_doc = next((doc for doc in case.documents if str(doc.id) == document_id), None)
+    if not target_doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found for this case",
+        )
+
+    file_content = await _read_document_bytes(service, target_doc.storage_key)
+    if not file_content:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Unable to read this document file. Please re-upload and try again.",
+        )
+
+    filename = target_doc.original_filename or Path(target_doc.storage_key).name or "document"
+    media_type = target_doc.mime_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+    return StreamingResponse(
+        iter([file_content]),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"'
         }
     )
 

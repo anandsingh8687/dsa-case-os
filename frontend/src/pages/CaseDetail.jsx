@@ -16,6 +16,7 @@ import {
 import {
   getCase,
   getCaseDocuments,
+  getCaseDocumentPreview,
   getCaseDocumentsArchive,
   updateCase,
   uploadDocuments,
@@ -65,6 +66,46 @@ const normalizeEmailText = (value) => {
     .replace(/\r\n/g, '\n')
     .replace(/[ \t]+\n/g, '\n')
     .trim();
+};
+
+const PRODUCT_NAME_OPTIONS = [
+  'BL',
+  'STBL',
+  'HTBL',
+  'MTBL',
+  'SBL',
+  'PL',
+  'HL',
+  'LAP',
+  'OD',
+  'CC',
+  'Digital',
+  'Direct',
+];
+
+const inferMimeFromFilename = (filename = '') => {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.pdf')) return 'application/pdf';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.tiff') || lower.endsWith('.tif')) return 'image/tiff';
+  return 'application/octet-stream';
+};
+
+const extractBlobErrorMessage = async (error, fallback) => {
+  const responseData = error?.response?.data;
+  if (!responseData) return fallback;
+  if (typeof responseData?.detail === 'string') return responseData.detail;
+  if (responseData instanceof Blob) {
+    try {
+      const text = await responseData.text();
+      const parsed = JSON.parse(text);
+      return parsed?.detail || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
 };
 
 const parseInterestRange = (rawRange) => {
@@ -243,6 +284,7 @@ const CaseDetail = () => {
   const [customLenderName, setCustomLenderName] = useState('');
   const [customProductName, setCustomProductName] = useState('');
   const [reuploadFiles, setReuploadFiles] = useState([]);
+  const [documentPreview, setDocumentPreview] = useState(null);
 
   const { data: caseData, isLoading: caseLoading } = useQuery({
     queryKey: ['case', caseId],
@@ -364,8 +406,32 @@ const CaseDetail = () => {
       window.URL.revokeObjectURL(url);
       toast.success('Case documents ZIP downloaded');
     },
-    onError: (error) => {
-      toast.error(error.response?.data?.detail || 'Failed to download document ZIP');
+    onError: async (error) => {
+      const message = await extractBlobErrorMessage(error, 'Failed to download document ZIP');
+      toast.error(message);
+    },
+  });
+
+  const previewDocumentMutation = useMutation({
+    mutationFn: (doc) => getCaseDocumentPreview(caseId, doc.id),
+    onSuccess: (response, doc) => {
+      if (documentPreview?.url) {
+        window.URL.revokeObjectURL(documentPreview.url);
+      }
+      const blob = response.data instanceof Blob
+        ? response.data
+        : new Blob([response.data], { type: inferMimeFromFilename(doc?.original_filename) });
+      const url = window.URL.createObjectURL(blob);
+      setDocumentPreview({
+        id: doc.id,
+        filename: doc.original_filename || 'document',
+        url,
+        mimeType: blob.type || inferMimeFromFilename(doc?.original_filename),
+      });
+    },
+    onError: async (error) => {
+      const message = await extractBlobErrorMessage(error, 'Unable to preview this document');
+      toast.error(message);
     },
   });
 
@@ -550,6 +616,12 @@ const CaseDetail = () => {
     }
   }, [allEligibilityResults, emailLenderKey]);
 
+  useEffect(() => () => {
+    if (documentPreview?.url) {
+      window.URL.revokeObjectURL(documentPreview.url);
+    }
+  }, [documentPreview?.url]);
+
   const tabs = [
     { id: 'documents', label: 'Documents', icon: FileText },
     { id: 'checklist', label: 'Checklist', icon: CheckSquare },
@@ -567,7 +639,7 @@ const CaseDetail = () => {
       : selectedEmailLender?.product_name;
 
     if (!lenderName) {
-      toast.error('Select a lender or enter a custom lender name');
+      toast.error('Select a lender or enter lender name');
       return;
     }
     if (!rmEmail) {
@@ -584,6 +656,9 @@ const CaseDetail = () => {
     }
 
     const loggedInUser = getUser();
+    const senderName =
+      normalizeEmailText(loggedInUser?.full_name) ||
+      (loggedInUser?.email ? String(loggedInUser.email).split('@')[0] : 'DSA Team');
     const resolvedTicket =
       selectedEmailLender?.expected_ticket_max ??
       firstMatchTicket ??
@@ -598,11 +673,8 @@ const CaseDetail = () => {
       strengthsList.length > 0
         ? strengthsList.map((item) => `- ${item}`).join('\n')
         : '- Clean banking profile';
-    const docNames = documents
-      .map((doc) => normalizeEmailText(doc.original_filename))
-      .filter(Boolean)
-      .slice(0, 12);
-    const docsInline = docNames.length > 0 ? docNames.join(', ') : 'Uploaded in case workspace';
+    const documentCount = documents.length;
+    const documentPackageLine = `${caseId}_documents.zip (${documentCount} file${documentCount === 1 ? '' : 's'})`;
 
     const subject = `[Credilo] ${productName} Case Submission - ${caseInfo?.borrower_name || caseId} (${caseId})`;
     const body = [
@@ -623,18 +695,17 @@ const CaseDetail = () => {
       'Top Strength Pointers:',
       strengths,
       '',
-      `Document Package: ${caseId}_documents.zip`,
-      `Included Files: ${docsInline}`,
+      `Document Package: ${documentPackageLine}`,
+      'Please find the document ZIP attached.',
       '',
       'Please review and share eligibility feedback with next steps.',
       '',
       'Regards,',
-      `${loggedInUser?.full_name || 'DSA Team'}`,
-      'Credilo',
+      senderName,
     ].join('\n');
 
     const mailto = `mailto:${encodeURIComponent(rmEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.location.href = mailto;
+    window.open(mailto, '_self');
   };
 
   if (caseLoading) {
@@ -767,7 +838,15 @@ const CaseDetail = () => {
                   {documents.map((doc) => (
                     <tr key={doc.id}>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {doc.original_filename}
+                        <button
+                          type="button"
+                          className="text-primary hover:underline disabled:text-gray-400"
+                          onClick={() => previewDocumentMutation.mutate(doc)}
+                          disabled={previewDocumentMutation.isPending}
+                          title="Click to preview"
+                        >
+                          {doc.original_filename}
+                        </button>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <Badge variant="info">{doc.doc_type || 'Unknown'}</Badge>
@@ -785,6 +864,11 @@ const CaseDetail = () => {
                 </tbody>
               </table>
             </div>
+          )}
+          {documents.length > 0 && (
+            <p className="text-xs text-gray-500 mt-3">
+              Click any filename to preview the uploaded document.
+            </p>
           )}
         </Card>
       )}
@@ -1593,14 +1677,14 @@ const CaseDetail = () => {
                         className="h-4 w-4"
                       />
                       <label htmlFor="custom-lender-toggle" className="text-sm text-gray-700">
-                        Use custom lender (not in knowledge base list)
+                        Use my own lender
                       </label>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                       {!useCustomLender ? (
                         <div className="md:col-span-1">
-                          <label className="block text-xs text-gray-600 mb-1">Lender</label>
+                          <label className="block text-xs text-gray-600 mb-1">Select Lender</label>
                           <select
                             value={emailLenderKey}
                             onChange={(e) => setEmailLenderKey(e.target.value)}
@@ -1623,7 +1707,7 @@ const CaseDetail = () => {
                       ) : (
                         <>
                           <div className="md:col-span-1">
-                            <label className="block text-xs text-gray-600 mb-1">Custom Lender Name</label>
+                            <label className="block text-xs text-gray-600 mb-1">Lender Name</label>
                             <input
                               type="text"
                               value={customLenderName}
@@ -1636,11 +1720,17 @@ const CaseDetail = () => {
                             <label className="block text-xs text-gray-600 mb-1">Product Name</label>
                             <input
                               type="text"
+                              list="custom-product-options"
                               value={customProductName}
                               onChange={(e) => setCustomProductName(e.target.value)}
                               placeholder="e.g., BL / LAP / STBL"
                               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                             />
+                            <datalist id="custom-product-options">
+                              {PRODUCT_NAME_OPTIONS.map((product) => (
+                                <option key={`product-opt-${product}`} value={product} />
+                              ))}
+                            </datalist>
                           </div>
                         </>
                       )}
@@ -1693,6 +1783,55 @@ const CaseDetail = () => {
           </div>
         </Card>
       )}
+
+      <Modal
+        isOpen={!!documentPreview}
+        onClose={() => {
+          if (documentPreview?.url) {
+            window.URL.revokeObjectURL(documentPreview.url);
+          }
+          setDocumentPreview(null);
+        }}
+        title={documentPreview ? `Document Preview • ${documentPreview.filename}` : 'Document Preview'}
+        size="lg"
+      >
+        {!documentPreview ? null : (
+          <div className="space-y-3">
+            {(documentPreview.mimeType || '').startsWith('image/') ? (
+              <img
+                src={documentPreview.url}
+                alt={documentPreview.filename}
+                className="max-h-[70vh] w-full object-contain border border-gray-200 rounded-lg"
+              />
+            ) : (documentPreview.mimeType || inferMimeFromFilename(documentPreview.filename)).includes('pdf') ? (
+              <iframe
+                src={documentPreview.url}
+                title={documentPreview.filename}
+                className="w-full h-[70vh] border border-gray-200 rounded-lg"
+              />
+            ) : (
+              <div className="border border-gray-200 rounded-lg p-6 text-sm text-gray-600 bg-gray-50">
+                This file type cannot be rendered in preview. Use download to open it locally.
+              </div>
+            )}
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const link = document.createElement('a');
+                  link.href = documentPreview.url;
+                  link.setAttribute('download', documentPreview.filename);
+                  document.body.appendChild(link);
+                  link.click();
+                  link.remove();
+                }}
+              >
+                Download File
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <Modal
         isOpen={!!rpsPreview}

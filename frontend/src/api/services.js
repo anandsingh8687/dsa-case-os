@@ -23,6 +23,11 @@ export const getCase = (caseId) =>
 export const getCaseDocuments = (caseId) =>
   apiClient.get(`/cases/${caseId}/documents`);
 
+export const getCaseDocumentPreview = (caseId, documentId) =>
+  apiClient.get(`/cases/${caseId}/documents/${documentId}/preview`, {
+    responseType: 'blob',
+  });
+
 export const getCaseDocumentsArchive = (caseId) =>
   apiClient.get(`/cases/${caseId}/documents/archive`, {
     responseType: 'blob',
