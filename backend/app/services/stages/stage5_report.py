@@ -385,14 +385,31 @@ async def generate_submission_strategy(
     # Get special requirements for top lender
     special_notes = await get_lender_special_requirements(top_lender.lender_name)
 
+    def _safe_score(value: Optional[float]) -> str:
+        if value is None:
+            return "N/A"
+        return f"{value:.0f}/100"
+
+    def _safe_ticket_range(min_ticket: Optional[float], max_ticket: Optional[float]) -> str:
+        if min_ticket is not None and max_ticket is not None:
+            return f"₹{min_ticket:.1f}L-₹{max_ticket:.1f}L"
+        if max_ticket is not None:
+            return f"Up to ₹{max_ticket:.1f}L"
+        if min_ticket is not None:
+            return f"From ₹{min_ticket:.1f}L"
+        return "Policy based"
+
+    top_ticket_text = _safe_ticket_range(top_lender.expected_ticket_min, top_lender.expected_ticket_max)
+    top_score_text = _safe_score(top_lender.eligibility_score)
+
     # Build lender list for context (top 5)
     lender_context = []
     for idx, lender in enumerate(passed[:5], start=1):
         lender_info = (
             f"{idx}. {lender.lender_name} - {lender.product_name}: "
-            f"Score {lender.eligibility_score:.0f}/100, "
+            f"Score {_safe_score(lender.eligibility_score)}, "
             f"Probability {lender.approval_probability.value.upper()}, "
-            f"Ticket ₹{lender.expected_ticket_min:.1f}L-₹{lender.expected_ticket_max:.1f}L"
+            f"Ticket {_safe_ticket_range(lender.expected_ticket_min, lender.expected_ticket_max)}"
         )
         lender_context.append(lender_info)
 
@@ -432,7 +449,7 @@ Our eligibility analysis has identified {len(passed)} compatible lenders, ranked
 Craft a 3-4 paragraph strategic story that:
 
 PARAGRAPH 1 - THE PERFECT MATCH:
-Start with why {top_lender.lender_name}'s {top_lender.product_name} product is the ideal first move for this borrower. Paint a picture of the alignment between the borrower's profile and this lender's appetite. Mention the strong eligibility score ({top_lender.eligibility_score:.0f}/100) and {top_lender.approval_probability.value} approval probability, explaining what this means in practical terms. Describe the realistic ticket range (₹{top_lender.expected_ticket_min:.1f}L - ₹{top_lender.expected_ticket_max:.1f}L) and how it fits the borrower's needs.
+Start with why {top_lender.lender_name}'s {top_lender.product_name} product is the ideal first move for this borrower. Paint a picture of the alignment between the borrower's profile and this lender's appetite. Mention the strong eligibility score ({top_score_text}) and {top_lender.approval_probability.value} approval probability, explaining what this means in practical terms. Describe the realistic ticket range ({top_ticket_text}) and how it fits the borrower's needs.
 
 PARAGRAPH 2 - THE STRATEGIC APPROACH:
 Detail the submission playbook. What documents should be prepared? What story should the application tell? Any specific requirements (video KYC, ownership proof, GST compliance) that need attention? Build confidence by explaining the borrower's competitive advantages and how to position them.

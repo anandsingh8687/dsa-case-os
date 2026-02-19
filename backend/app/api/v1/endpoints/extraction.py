@@ -1,5 +1,7 @@
 """Extraction API endpoints - Stage 2 field extraction and feature assembly."""
 import logging
+import time
+import asyncio
 from typing import List
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
@@ -16,6 +18,9 @@ from app.services.file_storage import get_storage_backend
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/extraction", tags=["extraction"])
+
+MAX_BANK_STATEMENTS_PER_RUN = 3
+BANK_ANALYSIS_TIMEOUT_SECONDS = 10.0
 
 
 @router.post("/case/{case_id}/extract")
@@ -39,6 +44,11 @@ async def trigger_extraction(
     Returns:
         Summary of extraction results
     """
+    started_at = time.perf_counter()
+    document_extraction_ms = 0.0
+    bank_analysis_ms = 0.0
+    feature_assembly_ms = 0.0
+
     try:
         # Get the case
         query = select(Case).where(Case.case_id == case_id)
@@ -67,6 +77,7 @@ async def trigger_extraction(
         all_extracted_fields = []
         extraction_summary = []
         bank_statement_docs = []
+        doc_extract_started = time.perf_counter()
 
         for doc in documents:
             try:
@@ -129,9 +140,18 @@ async def trigger_extraction(
                     "error": str(e)
                 })
 
+        document_extraction_ms = round((time.perf_counter() - doc_extract_started) * 1000, 2)
+
         # Analyze bank statements if present
         if bank_statement_docs:
+            bank_started = time.perf_counter()
             try:
+                bank_statement_docs = sorted(
+                    bank_statement_docs,
+                    key=lambda item: item.created_at or 0,
+                    reverse=True
+                )
+
                 # Get file paths for bank statements
                 bank_pdf_paths = []
                 for doc in bank_statement_docs:
@@ -140,6 +160,8 @@ async def trigger_extraction(
                         if file_path and file_path.exists():
                             bank_pdf_paths.append(str(file_path))
 
+                analyzed_pdf_paths = bank_pdf_paths[:MAX_BANK_STATEMENTS_PER_RUN]
+
                 if bank_pdf_paths:
                     logger.info(
                         f"Analyzing {len(bank_pdf_paths)} bank statement(s) "
@@ -147,7 +169,10 @@ async def trigger_extraction(
                     )
 
                     # Run bank analysis
-                    bank_result = await analyzer.analyze(bank_pdf_paths)
+                    bank_result = await asyncio.wait_for(
+                        analyzer.analyze(analyzed_pdf_paths),
+                        timeout=BANK_ANALYSIS_TIMEOUT_SECONDS
+                    )
 
                     # Convert bank analysis results to extracted fields
                     bank_fields = []
@@ -217,12 +242,18 @@ async def trigger_extraction(
 
                     extraction_summary.append({
                         "document_type": "BANK_STATEMENT",
-                        "documents_analyzed": len(bank_pdf_paths),
+                        "documents_analyzed": len(analyzed_pdf_paths),
+                        "documents_detected": len(bank_pdf_paths),
                         "fields_extracted": len(bank_fields),
                         "bank_detected": bank_result.bank_detected,
                         "transaction_count": bank_result.transaction_count,
                         "statement_period_months": bank_result.statement_period_months,
-                        "confidence": bank_result.confidence
+                        "confidence": bank_result.confidence,
+                        "note": (
+                            f"Used latest {len(analyzed_pdf_paths)} statements for faster analysis"
+                            if len(bank_pdf_paths) > len(analyzed_pdf_paths)
+                            else None
+                        ),
                     })
 
                     logger.info(
@@ -231,6 +262,17 @@ async def trigger_extraction(
                         f"{bank_result.confidence:.2f} confidence"
                     )
 
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Bank analysis timed out for case %s after %ss",
+                    case_id,
+                    BANK_ANALYSIS_TIMEOUT_SECONDS,
+                )
+                extraction_summary.append({
+                    "document_type": "BANK_STATEMENT",
+                    "error": f"Bank analysis timed out after {BANK_ANALYSIS_TIMEOUT_SECONDS:.0f}s",
+                    "documents_detected": len(bank_statement_docs),
+                })
             except Exception as e:
                 logger.error(
                     f"Error analyzing bank statements for case {case_id}: {str(e)}",
@@ -240,8 +282,11 @@ async def trigger_extraction(
                     "document_type": "BANK_STATEMENT",
                     "error": str(e)
                 })
+            finally:
+                bank_analysis_ms = round((time.perf_counter() - bank_started) * 1000, 2)
 
         # Assemble feature vector
+        feature_started = time.perf_counter()
         try:
             feature_vector = await assembler.assemble_features(
                 db=db,
@@ -266,13 +311,22 @@ async def trigger_extraction(
                 f"with {feature_vector.feature_completeness:.1f}% completeness"
             )
 
+            feature_assembly_ms = round((time.perf_counter() - feature_started) * 1000, 2)
+            total_ms = round((time.perf_counter() - started_at) * 1000, 2)
+
             return {
                 "status": "success",
                 "case_id": case_id,
                 "total_fields_extracted": len(all_extracted_fields),
                 "feature_completeness": feature_vector.feature_completeness,
                 "documents_processed": len(documents),
-                "extraction_summary": extraction_summary
+                "extraction_summary": extraction_summary,
+                "timing_ms": {
+                    "document_extraction": document_extraction_ms,
+                    "bank_analysis": bank_analysis_ms,
+                    "feature_assembly": feature_assembly_ms,
+                    "total": total_ms,
+                },
             }
 
         except Exception as e:

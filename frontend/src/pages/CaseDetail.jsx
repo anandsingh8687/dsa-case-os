@@ -110,6 +110,15 @@ const extractBlobErrorMessage = async (error, fallback) => {
   return fallback;
 };
 
+const extractApiErrorMessage = (error, fallback = 'Request failed') => {
+  const payload = error?.response?.data;
+  if (!payload) return fallback;
+  if (typeof payload === 'string') return payload.slice(0, 300);
+  if (typeof payload?.detail === 'string') return payload.detail;
+  if (typeof payload?.message === 'string') return payload.message;
+  return fallback;
+};
+
 const parseInterestRange = (rawRange) => {
   if (!rawRange || typeof rawRange !== 'string') return null;
   const nums = rawRange.match(/\\d+(?:\\.\\d+)?/g);
@@ -285,6 +294,7 @@ const CaseDetail = () => {
   const [rmEmail, setRmEmail] = useState('');
   const [reuploadFiles, setReuploadFiles] = useState([]);
   const [documentPreview, setDocumentPreview] = useState(null);
+  const [pipelineMetrics, setPipelineMetrics] = useState(null);
 
   const { data: caseData, isLoading: caseLoading } = useQuery({
     queryKey: ['case', caseId],
@@ -572,19 +582,55 @@ const CaseDetail = () => {
   const emiLoanAmountRupees = lakhToRupees(emiLoanAmountLakhs);
   const runFullPipelineMutation = useMutation({
     mutationFn: async () => {
-      await runExtraction(caseId);
-      await runScoring(caseId);
-      await generateReport(caseId);
+      const timings = {};
+      const startedAt = performance.now();
+      let stage = 'extraction';
+      let stageStartedAt = performance.now();
+      try {
+        const extractionResponse = await runExtraction(caseId);
+        timings.extraction = Number((performance.now() - stageStartedAt).toFixed(0));
+        timings.extraction_backend = extractionResponse?.data?.timing_ms || null;
+
+        stage = 'scoring';
+        stageStartedAt = performance.now();
+        await runScoring(caseId);
+        timings.scoring = Number((performance.now() - stageStartedAt).toFixed(0));
+
+        stage = 'report';
+        stageStartedAt = performance.now();
+        await generateReport(caseId);
+        timings.report = Number((performance.now() - stageStartedAt).toFixed(0));
+
+        timings.total = Number((performance.now() - startedAt).toFixed(0));
+        return timings;
+      } catch (error) {
+        error.pipelineStage = stage;
+        error.pipelineTimings = {
+          ...timings,
+          [stage]: Number((performance.now() - stageStartedAt).toFixed(0)),
+          total: Number((performance.now() - startedAt).toFixed(0)),
+        };
+        throw error;
+      }
     },
-    onSuccess: () => {
-      toast.success('All processing stages completed.');
+    onSuccess: (timings) => {
+      setPipelineMetrics(timings);
+      toast.success(
+        `Pipeline completed: extraction ${timings.extraction}ms, scoring ${timings.scoring}ms, report ${timings.report}ms`
+      );
       queryClient.invalidateQueries({ queryKey: ['case', caseId] });
       queryClient.invalidateQueries({ queryKey: ['case-documents', caseId] });
       queryClient.invalidateQueries({ queryKey: ['features', caseId] });
       queryClient.invalidateQueries({ queryKey: ['eligibility', caseId] });
     },
     onError: (error) => {
-      toast.error(error.response?.data?.detail || 'Full processing failed');
+      const stage = error?.pipelineStage || 'pipeline';
+      const detail = extractApiErrorMessage(error, 'Full processing failed');
+      const elapsed = error?.pipelineTimings?.[stage];
+      setPipelineMetrics(error?.pipelineTimings || null);
+      toast.error(
+        `${stage.toUpperCase()} failed${Number.isFinite(elapsed) ? ` after ${elapsed}ms` : ''}: ${detail}`
+      );
     },
   });
 
@@ -1041,6 +1087,19 @@ const CaseDetail = () => {
               <p className="text-xs text-gray-500 mt-2">
                 Runs extraction, eligibility scoring, and report generation sequentially.
               </p>
+              {pipelineMetrics && (
+                <p className="text-xs text-blue-700 mt-2">
+                  Last run timing: extraction {pipelineMetrics.extraction || 0}ms, scoring {pipelineMetrics.scoring || 0}ms,
+                  report {pipelineMetrics.report || 0}ms, total {pipelineMetrics.total || 0}ms
+                </p>
+              )}
+              {pipelineMetrics?.extraction_backend && (
+                <p className="text-xs text-blue-700 mt-1">
+                  Extraction internals: doc parse {pipelineMetrics.extraction_backend.document_extraction || 0}ms,
+                  bank analysis {pipelineMetrics.extraction_backend.bank_analysis || 0}ms,
+                  feature assembly {pipelineMetrics.extraction_backend.feature_assembly || 0}ms
+                </p>
+              )}
             </div>
           </Card>
         </div>

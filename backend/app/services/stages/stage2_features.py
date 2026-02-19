@@ -407,11 +407,8 @@ class FeatureAssembler:
             db.add(extracted_field)
             saved_fields.append(extracted_field)
 
-        await db.commit()
-
-        # Refresh all fields to get database-generated values
-        for field in saved_fields:
-            await db.refresh(field)
+        # Flush to assign DB-generated values; caller controls transaction commit.
+        await db.flush()
 
         logger.info(f"Saved {len(saved_fields)} extracted fields for case {case_id}")
         return saved_fields
