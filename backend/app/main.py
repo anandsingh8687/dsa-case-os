@@ -102,18 +102,18 @@ app.add_middleware(
 async def latency_tracking_middleware(request: Request, call_next):
     """Track request latency for p95 observability."""
     started_at = time.perf_counter()
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", request.url.path)
+        metric_key = f"{request.method} {route_path}"
 
-    elapsed_ms = (time.perf_counter() - started_at) * 1000
-    route = request.scope.get("route")
-    route_path = getattr(route, "path", request.url.path)
-    metric_key = f"{request.method} {route_path}"
-
-    # Capture only API metrics to keep cardinality stable.
-    if route_path.startswith(settings.API_PREFIX):
-        record_latency(metric_key, elapsed_ms)
-
-    return response
+        # Capture only API metrics to keep cardinality stable.
+        if route_path.startswith(settings.API_PREFIX):
+            record_latency(metric_key, elapsed_ms)
 
 # ─── Route Registration ───────────────────────────────────────
 # Each router already defines its own prefix (e.g. /auth, /cases)

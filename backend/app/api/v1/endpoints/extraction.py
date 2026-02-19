@@ -19,8 +19,8 @@ from app.services.file_storage import get_storage_backend
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/extraction", tags=["extraction"])
 
-MAX_BANK_STATEMENTS_PER_RUN = 3
-BANK_ANALYSIS_TIMEOUT_SECONDS = 10.0
+MAX_BANK_STATEMENTS_PER_RUN = 1
+BANK_ANALYSIS_TIMEOUT_SECONDS = 5.0
 
 
 @router.post("/case/{case_id}/extract")
