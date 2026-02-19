@@ -3,6 +3,7 @@ Computes financial metrics from parsed bank statement transactions.
 Uses Credilo parser for PDF extraction, then computes metrics.
 """
 import logging
+import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime, date
 from collections import defaultdict
@@ -58,7 +59,8 @@ class BankStatementAnalyzer:
             BankAnalysisResult with computed metrics
         """
         # Step 1: Parse with Credilo
-        statements = self.parser.parse_statements(pdf_paths)
+        # Offload parser work so endpoint-level asyncio timeouts can actually preempt long runs.
+        statements = await asyncio.to_thread(self.parser.parse_statements, pdf_paths)
 
         if not statements:
             logger.warning("No statements parsed from PDFs")
