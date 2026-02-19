@@ -105,7 +105,7 @@ const QuickScan = () => {
         },
       },
     });
-    toast.success('Opening full case workflow. Upload documents to continue.');
+    toast.success('Opening full case workflow with quick-scan prefill.');
   };
 
   return (

@@ -78,7 +78,10 @@ class CibilReportParser:
     def _extract_score(self, text: str) -> Optional[int]:
         patterns = [
             r"Your\s+CIBIL\s+Score\s+is\s+(\d{3})",
+            r"CIBIL\s*SCORE\s*[:\-]?\s*([3-9]\d{2})",
             r"(?:CIBIL\s+Score|Credit\s+Score|Score)\s*(?:is|:)?\s*(\d{3})",
+            r"Score\s*Value\s*[:\-]?\s*([3-9]\d{2})",
+            r"\b([3-9]\d{2})\s*/\s*900\b",
             r"\n\s*([3-9]\d{2})\s*\n\s*(?:GOOD|FAIR|POOR|VERY\s+GOOD|EXCELLENT)",
         ]
 
@@ -95,9 +98,16 @@ class CibilReportParser:
         return None
 
     def _extract_active_loans(self, text: str) -> Optional[int]:
-        match = re.search(r"(\d+)\s+Active\s+Loans", text, flags=re.IGNORECASE)
-        if match:
-            return int(match.group(1))
+        patterns = [
+            r"(\d+)\s+Active\s+Loans",
+            r"Active\s+Accounts?\s*[:\-]?\s*(\d+)",
+            r"Total\s+Active\s+Loans?\s*[:\-]?\s*(\d+)",
+            r"Active\s+Loan\s+Count\s*[:\-]?\s*(\d+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                return int(match.group(1))
 
         blocks = re.split(r"\bACCOUNT\s+DETAILS\b", text, flags=re.IGNORECASE)
         if len(blocks) <= 1:
@@ -115,9 +125,15 @@ class CibilReportParser:
         return active_count if active_count > 0 else None
 
     def _extract_overdue_count(self, text: str) -> Optional[int]:
-        match = re.search(r"Overdue\s+Payments\s+(\d+)", text, flags=re.IGNORECASE)
-        if match:
-            return int(match.group(1))
+        patterns = [
+            r"Overdue\s+Payments\s+(\d+)",
+            r"No\.?\s*of\s*Accounts?\s*with\s*Overdue\s*[:\-]?\s*(\d+)",
+            r"Accounts?\s+With\s+Overdue\s*[:\-]?\s*(\d+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                return int(match.group(1))
 
         blocks = re.split(r"\bACCOUNT\s+DETAILS\b", text, flags=re.IGNORECASE)
         if len(blocks) <= 1:
@@ -141,6 +157,8 @@ class CibilReportParser:
             r"Recent\s+Enquiries(?:\s+last\s+\d+\s+months?)?\s*[:\-]?\s*(\d{1,3})\b",
             r"Recent\s+Enquiries(?:\s*\n|\s)+(?:last\s+\d+\s+months?\s*)?(\d{1,3})\b",
             r"Enquiries\s+in\s+last\s+(?:3|6)\s+months?\s*[:\-]?\s*(\d{1,3})\b",
+            r"Total\s+Enquiries\s*\(?(?:last\s+6\s+months?)\)?\s*[:\-]?\s*(\d{1,3})\b",
+            r"Enquiries\s*\(6M\)\s*[:\-]?\s*(\d{1,3})\b",
         ]
         for pattern in summary_patterns:
             summary = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)

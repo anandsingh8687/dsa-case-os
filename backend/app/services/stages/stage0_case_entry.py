@@ -602,6 +602,7 @@ class CaseEntryService:
             industry_type=case.industry_type,
             pincode=case.pincode,
             loan_amount_requested=case.loan_amount_requested,
+            gstin=case.gstin,
             created_at=case.created_at,
             updated_at=case.updated_at
         )
@@ -695,6 +696,9 @@ class CaseEntryService:
 
             if gst_data.get("pincode"):
                 case.pincode = gst_data["pincode"]
+
+            if gst_data.get("industry_type") and not case.industry_type:
+                case.industry_type = gst_data["industry_type"]
 
             await self.db.commit()
             await self.db.refresh(case)

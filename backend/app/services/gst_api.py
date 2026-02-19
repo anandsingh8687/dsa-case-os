@@ -129,6 +129,22 @@ class GSTAPIService:
         enriched["pincode"] = pradr.get("pncd")
         enriched["state"] = pradr.get("stcd")
 
+        # Industry / business activity hints from API response when available.
+        industry_candidates = [
+            data.get("natureOfBusiness"),
+            data.get("nature_of_business"),
+            data.get("businessType"),
+            data.get("business_type"),
+            data.get("businessNature"),
+        ]
+        if isinstance(data.get("nba"), list):
+            industry_candidates.extend(data.get("nba"))
+        industry_value = next(
+            (value for value in industry_candidates if isinstance(value, str) and value.strip()),
+            None
+        )
+        enriched["industry_type"] = industry_value.strip() if isinstance(industry_value, str) else None
+
         # Map constitution to EntityType
         constitution = data.get("constitution", "").lower()
         entity_type = None

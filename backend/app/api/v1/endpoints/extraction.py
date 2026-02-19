@@ -152,6 +152,19 @@ async def trigger_extraction(
                             confidence=bank_result.confidence,
                             source="bank_analysis"
                         ))
+                        bank_fields.append(ExtractedFieldItem(
+                            field_name="monthly_turnover",
+                            field_value=str(bank_result.monthly_credit_avg),
+                            confidence=bank_result.confidence,
+                            source="bank_analysis"
+                        ))
+                        annual_turnover_lakhs = round((bank_result.monthly_credit_avg * 12) / 100000, 2)
+                        bank_fields.append(ExtractedFieldItem(
+                            field_name="annual_turnover",
+                            field_value=str(annual_turnover_lakhs),
+                            confidence=bank_result.confidence,
+                            source="bank_analysis"
+                        ))
 
                     if bank_result.emi_outflow_monthly is not None:
                         bank_fields.append(ExtractedFieldItem(

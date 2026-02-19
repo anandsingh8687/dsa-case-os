@@ -166,16 +166,28 @@ def parse_age_range(value: str) -> Tuple[Optional[int], Optional[int]]:
         return None, None
 
     value = value.strip()
+    lower_value = value.lower()
 
-    # Look for range pattern: 22-65
-    match = re.search(r'(\d+)\s*[-to]+\s*(\d+)', value)
+    # Look for common range patterns: 22-65, 22 to 65, 22–65
+    match = re.search(r'(\d+)\s*(?:-|to|–|—)\s*(\d+)', lower_value)
     if match:
-        return int(match.group(1)), int(match.group(2))
+        first = int(match.group(1))
+        second = int(match.group(2))
+        return (first, second) if first <= second else (second, first)
 
-    # Single number
-    num = parse_integer_value(value)
-    if num:
-        return num, num
+    # Fall back to number extraction for formats like "upto 60", "min 25", "age 21+"
+    numbers = [int(n) for n in re.findall(r'\d+', lower_value)]
+    if len(numbers) >= 2:
+        first, second = numbers[0], numbers[1]
+        return (first, second) if first <= second else (second, first)
+    if len(numbers) == 1:
+        num = numbers[0]
+        if any(token in lower_value for token in ['upto', 'up to', 'max', 'maximum', '<=', 'below', 'less than']):
+            return None, num
+        if any(token in lower_value for token in ['min', 'minimum', '>=', 'above', 'from', 'at least', '+']):
+            return num, None
+        # Default to upper bound only when single age is given.
+        return None, num
 
     return None, None
 
@@ -202,6 +214,14 @@ def parse_entity_types(value: str) -> List[str]:
         elif 'llp' in part:
             entities.append('llp')
         elif 'proprietor' in part or 'proprietorship' in part:
+            entities.append('proprietorship')
+        elif 'self' in part and 'non' in part and 'professional' in part:
+            entities.append('self_employed_non_professional')
+        elif 'self' in part and 'professional' in part:
+            entities.append('self_employed_professional')
+        elif 'self' in part and 'employed' in part:
+            entities.append('self_employed')
+        elif 'individual' in part:
             entities.append('proprietorship')
         elif 'partner' in part:
             entities.append('partnership')

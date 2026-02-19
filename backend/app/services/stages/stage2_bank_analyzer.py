@@ -170,33 +170,55 @@ class BankStatementAnalyzer:
 
     def _compute_avg_monthly_balance(self, transactions: List[Dict]) -> Optional[float]:
         """
-        Compute average monthly balance.
-        For each month, take the last closingBalance as month-end balance.
-        Average all month-end balances.
+        Compute average monthly balance using 5th/15th/25th checkpoint method.
+
+        For each month:
+        - pick closest known balance at each checkpoint day (5, 15, 25)
+        - average those three balances to get monthly average
+        Across months:
+        - average monthly averages
         """
         if not transactions:
             return None
 
-        # Group transactions by month
-        monthly_balances = {}
+        monthly_entries = defaultdict(list)
 
         for txn in transactions:
             txn_date = txn.get('transactionDate')
+            closing_balance = txn.get('closingBalance')
             if not txn_date:
                 continue
-
+            if closing_balance is None:
+                continue
             month_key = f"{txn_date.year}-{txn_date.month:02d}"
-            closing_balance = txn.get('closingBalance', 0)
+            monthly_entries[month_key].append((txn_date, float(closing_balance)))
 
-            # Keep updating - last transaction will have final balance
-            monthly_balances[month_key] = closing_balance
-
-        if not monthly_balances:
+        if not monthly_entries:
             return None
 
-        # Average all month-end balances
-        total = sum(monthly_balances.values())
-        return round(total / len(monthly_balances), 2)
+        checkpoint_days = (5, 15, 25)
+        monthly_checkpoint_averages = []
+
+        for month_key in sorted(monthly_entries.keys()):
+            entries = sorted(monthly_entries[month_key], key=lambda item: item[0])
+            checkpoint_values = []
+
+            for day in checkpoint_days:
+                prior_or_same = [bal for dt, bal in entries if dt.day <= day]
+                if prior_or_same:
+                    checkpoint_values.append(prior_or_same[-1])
+                    continue
+
+                # If no transaction before the checkpoint day, use first available of the month.
+                checkpoint_values.append(entries[0][1])
+
+            if checkpoint_values:
+                monthly_checkpoint_averages.append(sum(checkpoint_values) / len(checkpoint_values))
+
+        if not monthly_checkpoint_averages:
+            return None
+
+        return round(sum(monthly_checkpoint_averages) / len(monthly_checkpoint_averages), 2)
 
     def _compute_monthly_credit_avg(self, transactions: List[Dict]) -> Optional[float]:
         """
@@ -254,12 +276,12 @@ class BankStatementAnalyzer:
 
     def _compute_emi_outflow(self, transactions: List[Dict]) -> Optional[float]:
         """
-        Detect EMI patterns and compute total monthly EMI outflow.
+        Detect EMI patterns and compute current monthly EMI outflow.
 
         Logic:
-        1. Find recurring debits with similar amounts (±5% tolerance)
-        2. Check for EMI-related keywords in narration
-        3. Sum all detected EMI debits per month and average
+        1. Identify EMI-related debit transactions via narration keywords
+        2. Sum EMI debits month-wise
+        3. Return latest month's EMI sum (not average across months)
         """
         if not transactions:
             return None
@@ -296,9 +318,8 @@ class BankStatementAnalyzer:
         if not monthly_emi:
             return 0.0
 
-        # Average monthly EMI
-        total = sum(monthly_emi.values())
-        return round(total / len(monthly_emi), 2)
+        latest_month = sorted(monthly_emi.keys())[-1]
+        return round(monthly_emi[latest_month], 2)
 
     def _compute_bounce_count(self, transactions: List[Dict]) -> int:
         """

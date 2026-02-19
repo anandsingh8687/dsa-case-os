@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { useDropzone } from 'react-dropzone';
 import { useMutation } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { Upload, FileText, CheckCircle, Sparkles } from 'lucide-react';
+import { Upload, FileText, CheckCircle, Sparkles, Search } from 'lucide-react';
 import {
   createCase,
   updateCase,
@@ -35,6 +35,20 @@ const PROGRAM_OPTIONS = [
 ];
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const getBorrowerNameFromGst = (gstPayload) => {
+  if (!gstPayload || typeof gstPayload !== 'object') return '';
+  const candidates = [
+    gstPayload.borrower_name,
+    gstPayload.tradename,
+    gstPayload.trade_name,
+    gstPayload.tradeName,
+    gstPayload.name,
+    gstPayload.legal_name,
+    gstPayload.legalName,
+  ];
+  return candidates.find((value) => typeof value === 'string' && value.trim())?.trim() || '';
+};
 
 const toCasePayload = (data) => {
   const normalized = { ...data };
@@ -86,7 +100,7 @@ const NewCase = () => {
       if (details) {
         console.warn('[NewCase] Auto pipeline warning:', details);
       }
-      toast('Upload done. You can continue processing from View Case.', { icon: 'ℹ️' });
+      toast('Upload done. You can continue processing from case workspace.', { icon: 'ℹ️' });
     }
   };
 
@@ -184,14 +198,22 @@ const NewCase = () => {
 
     setIsCheckingGST(true);
     try {
-      const response = await apiClient.get(`/cases/${targetCaseId}/gst-data`);
+      for (let attempt = 1; attempt <= 5; attempt += 1) {
+        try {
+          const response = await apiClient.get(`/cases/${targetCaseId}/gst-data`);
+          if (response.data && response.data.gst_data) {
+            setGstData(response.data.gst_data);
+            toast.success('GST data detected and form pre-filled.');
+            return;
+          }
+        } catch (error) {
+          // continue polling for GST extraction
+        }
 
-      if (response.data && response.data.gst_data) {
-        setGstData(response.data.gst_data);
-        toast.success('🎉 GST data detected! You can auto-fill the form now.');
+        if (attempt < 5) {
+          await wait(1200);
+        }
       }
-    } catch (error) {
-      // No GST data available yet - this is normal
       console.log('No GST data available yet');
     } finally {
       setIsCheckingGST(false);
@@ -202,8 +224,9 @@ const NewCase = () => {
   const autoFillFromGST = () => {
     if (!gstData) return;
 
-    if (gstData.borrower_name) {
-      setValue('borrower_name', gstData.borrower_name);
+    const borrowerName = getBorrowerNameFromGst(gstData);
+    if (borrowerName) {
+      setValue('borrower_name', borrowerName);
     }
     if (gstData.entity_type) {
       setValue('entity_type', gstData.entity_type);
@@ -213,7 +236,9 @@ const NewCase = () => {
     }
 
     toast.success('Form pre-filled from GST data!');
-    setStep(1); // Go back to step 1 to edit
+    if (workflowMode === 'form-first') {
+      setStep(1);
+    }
   };
 
   const onDrop = (acceptedFiles) => {
@@ -269,7 +294,7 @@ const NewCase = () => {
   const handleDocsFirstStart = async (seedData = {}) => {
     try {
       const minimalData = {
-        borrower_name: seedData.borrower_name || 'Pending Upload',
+        borrower_name: seedData.borrower_name || undefined,
         entity_type: seedData.entity_type || 'proprietorship',
         program_type: seedData.program_type || 'banking',
         pincode: seedData.pincode || undefined,
@@ -284,7 +309,9 @@ const NewCase = () => {
       setCaseId(response.data.case_id);
       setWorkflowMode('docs-first');
       setStep(1); // Go to upload step
-      setValue('borrower_name', minimalData.borrower_name);
+      if (minimalData.borrower_name) {
+        setValue('borrower_name', minimalData.borrower_name);
+      }
       setValue('entity_type', minimalData.entity_type);
       setValue('program_type', minimalData.program_type);
       if (minimalData.pincode) {
@@ -305,13 +332,40 @@ const NewCase = () => {
       return;
     }
 
-    const bootstrapFromQuickScan = async () => {
-      await handleDocsFirstStart(quickScanPrefill);
-      navigate('/cases/new', { replace: true, state: null });
-    };
-
-    void bootstrapFromQuickScan();
+    setWorkflowMode('form-first');
+    setStep(1);
+    if (quickScanPrefill.borrower_name) {
+      setValue('borrower_name', quickScanPrefill.borrower_name);
+    }
+    if (quickScanPrefill.entity_type) {
+      setValue('entity_type', quickScanPrefill.entity_type);
+    }
+    if (quickScanPrefill.program_type) {
+      setValue('program_type', quickScanPrefill.program_type);
+    }
+    if (quickScanPrefill.pincode) {
+      setValue('pincode', quickScanPrefill.pincode);
+    }
+    if (quickScanPrefill.loan_amount_requested !== null && quickScanPrefill.loan_amount_requested !== undefined) {
+      setValue('loan_amount_requested', quickScanPrefill.loan_amount_requested);
+    }
+    navigate('/cases/new', { replace: true, state: null });
   }, [quickScanPrefill, step, workflowMode, caseId, navigate]);
+
+  useEffect(() => {
+    if (!gstData) return;
+
+    const borrowerName = getBorrowerNameFromGst(gstData);
+    if (borrowerName) {
+      setValue('borrower_name', borrowerName);
+    }
+    if (gstData.entity_type) {
+      setValue('entity_type', gstData.entity_type);
+    }
+    if (gstData.pincode) {
+      setValue('pincode', String(gstData.pincode));
+    }
+  }, [gstData, setValue]);
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -386,6 +440,23 @@ const NewCase = () => {
               </button>
             </div>
 
+            <div className="mt-6 max-w-3xl mx-auto">
+              <button
+                onClick={() => navigate('/quick-scan')}
+                className="w-full p-4 border border-blue-200 bg-blue-50 rounded-xl hover:bg-blue-100 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3">
+                  <Search className="w-5 h-5 text-primary" />
+                  <div>
+                    <div className="font-semibold text-primary">Run Quick Scan First (No Documents)</div>
+                    <div className="text-xs text-blue-700">
+                      Check instant eligibility, then continue into this New Case flow with pre-filled values.
+                    </div>
+                  </div>
+                </div>
+              </button>
+            </div>
+
             <div className="mt-6">
               <Button
                 type="button"
@@ -453,7 +524,7 @@ const NewCase = () => {
                   required: 'Borrower name is required',
                 })}
               />
-              {gstData && gstData.borrower_name && (
+              {gstData && getBorrowerNameFromGst(gstData) && (
                 <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
                   <CheckCircle className="w-3 h-3" />
                   Auto-filled from GST
@@ -791,12 +862,35 @@ const NewCase = () => {
               toast.error('Case not found. Please restart this flow.');
               return;
             }
-            await updateCaseMutation.mutateAsync({
-              caseId,
-              data: toCasePayload(data),
-            });
+            const payload = toCasePayload(data);
+            let updated = false;
+            let lastError = null;
+
+            for (let attempt = 1; attempt <= 2; attempt += 1) {
+              try {
+                await updateCaseMutation.mutateAsync({
+                  caseId,
+                  data: payload,
+                });
+                updated = true;
+                break;
+              } catch (error) {
+                lastError = error;
+                if (attempt < 2) {
+                  await wait(700);
+                }
+              }
+            }
+
+            if (!updated) {
+              if (!lastError) {
+                toast.error('Failed to update case');
+              }
+              return;
+            }
+
             toast.success('Case details saved!');
-            setStep(3);
+            navigate(`/cases/${caseId}`);
           })}>
             <div className="relative">
               <Input
@@ -807,7 +901,7 @@ const NewCase = () => {
                   required: 'Borrower name is required',
                 })}
               />
-              {gstData && gstData.borrower_name && (
+              {gstData && getBorrowerNameFromGst(gstData) && (
                 <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
                   <CheckCircle className="w-3 h-3" />
                   Auto-filled from GST

@@ -108,10 +108,36 @@ class FeatureAssembler:
             "full_name": case.borrower_name,
             "entity_type": case.entity_type,
             "business_vintage_years": case.business_vintage_years,
+            "gstin": case.gstin,
             "cibil_score": case.cibil_score_manual,
             "industry_type": case.industry_type,
             "pincode": case.pincode,
         }
+
+        if isinstance(case.gst_data, dict):
+            gst_payload = case.gst_data
+            gst_name = (
+                gst_payload.get("borrower_name")
+                or gst_payload.get("tradename")
+                or gst_payload.get("trade_name")
+                or gst_payload.get("name")
+            )
+            if gst_name and not manual_overrides.get("full_name"):
+                manual_overrides["full_name"] = gst_name
+            if gst_payload.get("entity_type") and not manual_overrides.get("entity_type"):
+                manual_overrides["entity_type"] = gst_payload.get("entity_type")
+            if gst_payload.get("business_vintage_years") is not None and manual_overrides.get("business_vintage_years") is None:
+                manual_overrides["business_vintage_years"] = gst_payload.get("business_vintage_years")
+            if gst_payload.get("pincode") and not manual_overrides.get("pincode"):
+                manual_overrides["pincode"] = str(gst_payload.get("pincode"))
+            gst_industry = (
+                gst_payload.get("industry_type")
+                or gst_payload.get("business_type")
+                or gst_payload.get("nature_of_business")
+                or gst_payload.get("natureOfBusiness")
+            )
+            if gst_industry and not manual_overrides.get("industry_type"):
+                manual_overrides["industry_type"] = gst_industry
 
         # Process each field in the mapping
         for field_name, vector_attr in FIELD_MAPPING.items():
@@ -137,6 +163,20 @@ class FeatureAssembler:
             logger.info(
                 f"Set monthly_turnover = {feature_data['monthly_turnover']} "
                 f"(from monthly_credit_avg)"
+            )
+
+        # Derive annual turnover in Lakhs from monthly bank credits when explicit turnover is missing.
+        if (
+            feature_data.get("annual_turnover") is None
+            and feature_data.get("monthly_turnover") is not None
+            and feature_data["monthly_turnover"] > 0
+        ):
+            annual_turnover_lakhs = round((feature_data["monthly_turnover"] * 12) / 100000, 2)
+            feature_data["annual_turnover"] = annual_turnover_lakhs
+            logger.info(
+                "Derived annual_turnover=%sL from monthly_turnover=%s",
+                annual_turnover_lakhs,
+                feature_data["monthly_turnover"],
             )
 
         # Calculate feature completeness

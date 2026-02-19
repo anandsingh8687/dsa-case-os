@@ -9,6 +9,7 @@ Architecture:
 """
 
 import logging
+import re
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import date, datetime
 from uuid import UUID
@@ -24,6 +25,39 @@ from app.services.lender_service import get_all_products_for_scoring
 from app.db.database import get_db_session
 
 logger = logging.getLogger(__name__)
+
+ENTITY_EQUIVALENCE_MAP = {
+    "proprietorship": {"proprietorship", "proprietor", "sole_proprietorship", "individual", "self_employed", "self_employed_non_professional"},
+    "partnership": {"partnership", "partnership_firm", "firm"},
+    "llp": {"llp", "limited_liability_partnership"},
+    "pvt_ltd": {"pvt_ltd", "private_limited", "private_limited_company", "opc", "one_person_company", "company"},
+    "public_ltd": {"public_ltd", "public_limited", "public_limited_company"},
+    "trust": {"trust"},
+    "society": {"society", "ngo"},
+    "huf": {"huf"},
+}
+
+
+def _normalize_entity_value(value: Optional[str]) -> str:
+    if value is None:
+        return ""
+    normalized = str(value).strip().lower()
+    normalized = normalized.replace("&", "and")
+    normalized = re.sub(r"[^a-z0-9]+", "_", normalized)
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    return normalized
+
+
+def _entity_variants(value: Optional[str]) -> set[str]:
+    normalized = _normalize_entity_value(value)
+    if not normalized:
+        return set()
+    variants = {normalized}
+    for canonical, aliases in ENTITY_EQUIVALENCE_MAP.items():
+        if normalized == canonical or normalized in aliases:
+            variants.add(canonical)
+            variants.update(aliases)
+    return variants
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -66,12 +100,14 @@ async def apply_hard_filters(
 
     # Filter 3: Entity type
     if lender.eligible_entity_types and borrower.entity_type:
-        # Normalize entity type for comparison
         borrower_entity = borrower.entity_type.value if isinstance(borrower.entity_type, EntityType) else str(borrower.entity_type)
+        borrower_variants = _entity_variants(borrower_entity)
 
-        # Check if borrower's entity type is in the eligible list (case-insensitive)
-        eligible_types_lower = [et.lower() for et in lender.eligible_entity_types]
-        if borrower_entity.lower() not in eligible_types_lower:
+        eligible_variants = set()
+        for raw_type in lender.eligible_entity_types:
+            eligible_variants.update(_entity_variants(raw_type))
+
+        if borrower_variants.isdisjoint(eligible_variants):
             failures["entity_type"] = (
                 f"{borrower_entity} not in eligible types: {', '.join(lender.eligible_entity_types)}"
             )
@@ -91,11 +127,27 @@ async def apply_hard_filters(
             )
 
     # Filter 6: Age (calculate from DOB if available)
-    if lender.age_min and lender.age_max and borrower.dob:
+    age_min = lender.age_min
+    age_max = lender.age_max
+    if age_min is not None and age_max is not None:
+        if age_min > age_max:
+            age_min, age_max = age_max, age_min
+        if age_min == age_max:
+            # Defensive normalization for malformed policy rows like "60-60".
+            if age_min >= 45:
+                age_min = None
+            else:
+                age_max = None
+
+    if borrower.dob and (age_min is not None or age_max is not None):
         age = calculate_age(borrower.dob)
-        if age < lender.age_min or age > lender.age_max:
+        if age_min is not None and age < age_min:
             failures["age"] = (
-                f"Age {age} outside range {lender.age_min}-{lender.age_max}"
+                f"Age {age} outside minimum {age_min}"
+            )
+        elif age_max is not None and age > age_max:
+            failures["age"] = (
+                f"Age {age} outside maximum {age_max}"
             )
 
     # Filter 7: Average Bank Balance (ABB)

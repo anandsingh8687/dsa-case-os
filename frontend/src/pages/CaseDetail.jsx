@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -17,7 +17,9 @@ import {
   getCase,
   getCaseDocuments,
   updateCase,
+  uploadDocuments,
   getDocumentChecklist,
+  getExtractedFields,
   getFeatureVector,
   getEligibilityResults,
   getEligibilityExplanation,
@@ -43,6 +45,15 @@ const lakhToRupees = (valueInLakhs) => {
 const formatLakhAmount = (valueInLakhs) => {
   const rupees = lakhToRupees(valueInLakhs);
   return formatCurrency(rupees);
+};
+
+const formatInThousands = (rawValue) => {
+  if (rawValue === null || rawValue === undefined || Number.isNaN(Number(rawValue))) {
+    return 'N/A';
+  }
+  return `₹${(Number(rawValue) / 1000).toLocaleString('en-IN', {
+    maximumFractionDigits: 2,
+  })}K`;
 };
 
 const parseInterestRange = (rawRange) => {
@@ -217,6 +228,7 @@ const CaseDetail = () => {
   const [rpsPreview, setRpsPreview] = useState(null);
   const [emailLenderKey, setEmailLenderKey] = useState('');
   const [rmEmail, setRmEmail] = useState('');
+  const [reuploadFiles, setReuploadFiles] = useState([]);
 
   const { data: caseData, isLoading: caseLoading } = useQuery({
     queryKey: ['case', caseId],
@@ -239,6 +251,12 @@ const CaseDetail = () => {
     queryKey: ['features', caseId],
     queryFn: () => getFeatureVector(caseId),
     enabled: activeTab === 'profile' || activeTab === 'eligibility',
+  });
+
+  const { data: extractedFieldsData } = useQuery({
+    queryKey: ['extracted-fields', caseId],
+    queryFn: () => getExtractedFields(caseId),
+    enabled: activeTab === 'profile',
   });
 
   const { data: eligibilityData } = useQuery({
@@ -327,22 +345,80 @@ const CaseDetail = () => {
   const caseReport = caseReportData?.data || null;
   const whatsappSummary = typeof whatsappSummaryData?.data === 'string' ? whatsappSummaryData.data : '';
   const comprehensiveNarrative = comprehensiveNarrativeData?.data || null;
-  const matchingEligibilityResults = Array.isArray(eligibility?.results)
-    ? eligibility.results.filter((result) => result.hard_filter_status === 'pass')
+  const allEligibilityResults = Array.isArray(eligibility?.results)
+    ? eligibility.results
     : [];
-  const rejectedEligibilityResults = Array.isArray(eligibility?.results)
-    ? eligibility.results.filter((result) => result.hard_filter_status === 'fail')
-    : [];
-  const firstMatchTicket = matchingEligibilityResults[0]?.expected_ticket_max;
+  const matchingEligibilityResults = allEligibilityResults
+    .filter((result) => result.hard_filter_status === 'pass');
+  const rejectedEligibilityResults = allEligibilityResults
+    .filter((result) => result.hard_filter_status === 'fail');
+  const extractedFields = Array.isArray(extractedFieldsData?.data) ? extractedFieldsData.data : [];
+  const additionalApplicants = useMemo(() => {
+    const primaryPan = String(features?.pan_number || '').trim().toUpperCase();
+    const primaryAadhaar = String(features?.aadhaar_number || '').replace(/\s+/g, '');
+    const primaryName = String(features?.full_name || '').trim().toLowerCase();
 
-  const emiLoanAmountRupees = lakhToRupees(emiLoanAmountLakhs);
-  const selectedEmailLender = matchingEligibilityResults.find(
+    const panValues = extractedFields
+      .filter((field) => field.field_name === 'pan_number' && field.field_value)
+      .map((field) => String(field.field_value).trim().toUpperCase());
+    const aadhaarValues = extractedFields
+      .filter((field) => field.field_name === 'aadhaar_number' && field.field_value)
+      .map((field) => String(field.field_value).replace(/\s+/g, ''));
+    const nameValues = extractedFields
+      .filter((field) => field.field_name === 'full_name' && field.field_value)
+      .map((field) => String(field.field_value).trim());
+    const dobValues = extractedFields
+      .filter((field) => field.field_name === 'dob' && field.field_value)
+      .map((field) => String(field.field_value).trim());
+
+    const maxLen = Math.max(panValues.length, aadhaarValues.length, nameValues.length, dobValues.length);
+    const applicants = [];
+    for (let idx = 0; idx < maxLen; idx += 1) {
+      const pan = panValues[idx] || '';
+      const aadhaar = aadhaarValues[idx] || '';
+      const fullName = nameValues[idx] || '';
+      const dob = dobValues[idx] || '';
+      if (!pan && !aadhaar && !fullName) continue;
+
+      const isPrimary =
+        (pan && primaryPan && pan === primaryPan) ||
+        (aadhaar && primaryAadhaar && aadhaar === primaryAadhaar) ||
+        (fullName && primaryName && fullName.toLowerCase() === primaryName);
+      if (!isPrimary) {
+        applicants.push({
+          full_name: fullName || 'Co-applicant',
+          pan_number: pan || null,
+          aadhaar_number: aadhaar || null,
+          dob: dob || null,
+        });
+      }
+    }
+
+    const deduped = [];
+    const seen = new Set();
+    applicants.forEach((item) => {
+      const key = `${item.pan_number || ''}|${item.aadhaar_number || ''}|${item.full_name || ''}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      deduped.push(item);
+    });
+
+    return deduped.slice(0, 4);
+  }, [extractedFields, features?.aadhaar_number, features?.full_name, features?.pan_number]);
+  const annualTurnoverLakhs = features?.annual_turnover;
+  const monthlyTurnoverAmount = features?.monthly_turnover ?? features?.monthly_credit_avg;
+  const avgMonthlyBalance = features?.avg_monthly_balance;
+  const monthlyCreditAvg = features?.monthly_credit_avg;
+  const monthlyEmiOutflow = features?.emi_outflow_monthly;
+  const selectedEmailLender = allEligibilityResults.find(
     (item) => `${item.lender_name}::${item.product_name}` === emailLenderKey
   ) || null;
   const selectedLenderSignals = buildMatchedSignalsForModal(selectedLender, features);
   const docFramework =
     DOCUMENTATION_FRAMEWORK_2026[selectedProgram] || DOCUMENTATION_FRAMEWORK_2026.banking;
+  const firstMatchTicket = matchingEligibilityResults[0]?.expected_ticket_max;
 
+  const emiLoanAmountRupees = lakhToRupees(emiLoanAmountLakhs);
   const runFullPipelineMutation = useMutation({
     mutationFn: async () => {
       await runExtraction(caseId);
@@ -378,6 +454,34 @@ const CaseDetail = () => {
     },
   });
 
+  const reuploadDocumentsMutation = useMutation({
+    mutationFn: async (filesToUpload) => {
+      const formData = new FormData();
+      filesToUpload.forEach((file) => {
+        formData.append('files', file);
+      });
+      await uploadDocuments(caseId, formData);
+      await runExtraction(caseId);
+      await runScoring(caseId);
+      await generateReport(caseId);
+    },
+    onSuccess: () => {
+      toast.success('Documents uploaded and pipeline re-run completed.');
+      setReuploadFiles([]);
+      queryClient.invalidateQueries({ queryKey: ['case', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['case-documents', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['checklist', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['features', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['eligibility', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['case-report', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['report-whatsapp', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['report-narrative-comprehensive', caseId] });
+    },
+    onError: (error) => {
+      toast.error(error.response?.data?.detail || 'Failed to upload and reprocess documents');
+    },
+  });
+
   useEffect(() => {
     if (caseInfo?.program_type) {
       setSelectedProgram(String(caseInfo.program_type).toLowerCase());
@@ -406,12 +510,12 @@ const CaseDetail = () => {
   }, [caseInfo?.loan_amount_requested, firstMatchTicket]);
 
   useEffect(() => {
-    if (!matchingEligibilityResults.length) return;
+    if (!allEligibilityResults.length) return;
     if (!emailLenderKey) {
-      const first = matchingEligibilityResults[0];
+      const first = allEligibilityResults[0];
       setEmailLenderKey(`${first.lender_name}::${first.product_name}`);
     }
-  }, [matchingEligibilityResults.length, emailLenderKey]);
+  }, [allEligibilityResults, emailLenderKey]);
 
   const tabs = [
     { id: 'documents', label: 'Documents', icon: FileText },
@@ -432,7 +536,12 @@ const CaseDetail = () => {
     }
 
     const loggedInUser = getUser();
-    const ticketText = formatLakhAmount(selectedEmailLender.expected_ticket_max);
+    const resolvedTicket =
+      selectedEmailLender.expected_ticket_max ??
+      firstMatchTicket ??
+      caseInfo?.loan_amount_requested ??
+      null;
+    const ticketText = formatLakhAmount(resolvedTicket);
     const strengths = (caseReport?.strengths || []).slice(0, 3).join('; ') || 'Clean basic profile';
     const docNames = documents.map((doc) => doc.original_filename).filter(Boolean).slice(0, 8).join(', ') || 'Available in case folder';
     const subject = `[Credilo] ${selectedEmailLender.product_name} Case Submission - ${caseInfo?.borrower_name || caseId} (${caseId})`;
@@ -535,7 +644,38 @@ const CaseDetail = () => {
       {/* Tab Content */}
       {activeTab === 'documents' && (
         <Card>
-          <h2 className="text-xl font-semibold mb-4">Uploaded Documents</h2>
+          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-4">
+            <div>
+              <h2 className="text-xl font-semibold">Uploaded Documents</h2>
+              <p className="text-xs text-gray-500 mt-1">
+                Re-upload ZIP or individual files to refresh classification and pipeline outputs.
+              </p>
+            </div>
+            <div className="flex flex-col md:flex-row gap-2 md:items-center">
+              <input
+                type="file"
+                multiple
+                accept=".pdf,.png,.jpg,.jpeg,.zip"
+                onChange={(event) => {
+                  const picked = Array.from(event.target.files || []);
+                  setReuploadFiles(picked);
+                }}
+                className="text-sm"
+              />
+              <Button
+                onClick={() => {
+                  if (!reuploadFiles.length) {
+                    toast.error('Select at least one file to upload');
+                    return;
+                  }
+                  reuploadDocumentsMutation.mutate(reuploadFiles);
+                }}
+                disabled={reuploadDocumentsMutation.isPending || reuploadFiles.length === 0}
+              >
+                {reuploadDocumentsMutation.isPending ? 'Uploading & Reprocessing...' : 'Re-upload Documents'}
+              </Button>
+            </div>
+          </div>
           {documents.length === 0 ? (
             <p className="text-gray-500 text-center py-8">No documents uploaded</p>
           ) : (
@@ -656,7 +796,7 @@ const CaseDetail = () => {
 
             <div className="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4">
               <h3 className="font-semibold text-gray-900 mb-2">
-                Standardized Documentation Framework (2026)
+                Loan Checklist
               </h3>
               <p className="text-xs text-gray-600 mb-3">
                 Guidance checklist to reduce back-and-forth with borrowers and improve first-pass lender submissions.
@@ -737,6 +877,30 @@ const CaseDetail = () => {
                     <span className="font-medium text-right">{features.dob || 'N/A'}</span>
                   </div>
                 </div>
+                {additionalApplicants.length > 0 && (
+                  <div className="pt-3 mt-3 border-t border-gray-100 space-y-2">
+                    <h4 className="text-sm font-semibold text-gray-900">
+                      Additional Applicant Details ({additionalApplicants.length})
+                    </h4>
+                    {additionalApplicants.map((applicant, idx) => (
+                      <div key={`co-app-${idx}`} className="rounded-md border border-gray-200 p-3 bg-gray-50">
+                        <div className="text-xs font-semibold text-gray-700 mb-1">
+                          Co-applicant {idx + 1}
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                          <div>Full Name: <span className="font-medium">{applicant.full_name || 'N/A'}</span></div>
+                          <div>PAN: <span className="font-medium">{applicant.pan_number || 'N/A'}</span></div>
+                          <div>
+                            Aadhaar: <span className="font-medium">
+                              {applicant.aadhaar_number ? `****${applicant.aadhaar_number.slice(-4)}` : 'N/A'}
+                            </span>
+                          </div>
+                          <div>DOB: <span className="font-medium">{applicant.dob || 'N/A'}</span></div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* BUSINESS Section */}
@@ -745,17 +909,19 @@ const CaseDetail = () => {
                 <div className="space-y-3">
                   <div className="flex justify-between items-start">
                     <span className="text-sm text-gray-600">Entity Type</span>
-                    <span className="font-medium text-right capitalize">{features.entity_type || 'N/A'}</span>
+                    <span className="font-medium text-right capitalize">{features.entity_type || caseInfo?.entity_type || 'N/A'}</span>
                   </div>
                   <div className="flex justify-between items-start">
                     <span className="text-sm text-gray-600">Business Vintage</span>
                     <span className="font-medium text-right">
-                      {features.business_vintage_years ? `${features.business_vintage_years} years` : 'N/A'}
+                      {features.business_vintage_years || caseInfo?.business_vintage_years
+                        ? `${features.business_vintage_years || caseInfo?.business_vintage_years} years`
+                        : 'N/A'}
                     </span>
                   </div>
                   <div className="flex justify-between items-start">
                     <span className="text-sm text-gray-600">GSTIN</span>
-                    <span className="font-medium text-right">{features.gstin || 'N/A'}</span>
+                    <span className="font-medium text-right">{features.gstin || caseInfo?.gstin || 'N/A'}</span>
                   </div>
                   <div className="flex justify-between items-start">
                     <span className="text-sm text-gray-600">Industry</span>
@@ -775,36 +941,36 @@ const CaseDetail = () => {
                   <div className="flex justify-between items-start">
                     <span className="text-sm text-gray-600">Annual Turnover</span>
                     <span className="font-medium text-right">
-                      {features.annual_turnover ? `₹${Number(features.annual_turnover).toLocaleString('en-IN')} L` : 'N/A'}
+                      {annualTurnoverLakhs ? `₹${Number(annualTurnoverLakhs).toLocaleString('en-IN')} L` : 'N/A'}
                     </span>
                   </div>
                   <div className="flex justify-between items-start">
                     <span className="text-sm text-gray-600">Monthly Turnover</span>
                     <div className="text-right">
                       <span className="font-medium">
-                        {features.monthly_turnover ? `₹${Number(features.monthly_turnover).toLocaleString('en-IN')}` : 'N/A'}
+                        {monthlyTurnoverAmount ? `₹${Number(monthlyTurnoverAmount).toLocaleString('en-IN')}` : 'N/A'}
                       </span>
-                      {features.monthly_turnover && (
+                      {monthlyTurnoverAmount && (
                         <span className="ml-2 text-xs text-blue-600">from bank</span>
                       )}
                     </div>
                   </div>
                   <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Avg Monthly Balance</span>
+                    <span className="text-sm text-gray-600">Avg Monthly Balance (in thousands)</span>
                     <span className="font-medium text-right">
-                      {features.avg_monthly_balance ? `₹${Number(features.avg_monthly_balance).toLocaleString('en-IN')}` : 'N/A'}
+                      {formatInThousands(avgMonthlyBalance)}
                     </span>
                   </div>
                   <div className="flex justify-between items-start">
                     <span className="text-sm text-gray-600">Monthly Credits (Avg)</span>
                     <span className="font-medium text-right">
-                      {features.monthly_credit_avg ? `₹${Number(features.monthly_credit_avg).toLocaleString('en-IN')}` : 'N/A'}
+                      {monthlyCreditAvg ? `₹${Number(monthlyCreditAvg).toLocaleString('en-IN')}` : 'N/A'}
                     </span>
                   </div>
                   <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">EMI Outflow (Monthly)</span>
+                    <span className="text-sm text-gray-600">EMI Outflow (Current Month)</span>
                     <span className="font-medium text-right">
-                      {features.emi_outflow_monthly ? `₹${Number(features.emi_outflow_monthly).toLocaleString('en-IN')}` : 'N/A'}
+                      {monthlyEmiOutflow ? `₹${Number(monthlyEmiOutflow).toLocaleString('en-IN')}` : 'N/A'}
                     </span>
                   </div>
                   <div className="flex justify-between items-start">
@@ -813,18 +979,6 @@ const CaseDetail = () => {
                       features.bounce_count_12m > 0 ? 'text-red-600' : 'text-green-600'
                     }`}>
                       {features.bounce_count_12m !== null && features.bounce_count_12m !== undefined ? features.bounce_count_12m : 'N/A'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Cash Deposit Ratio</span>
-                    <span className="font-medium text-right">
-                      {features.cash_deposit_ratio ? `${(features.cash_deposit_ratio * 100).toFixed(1)}%` : 'N/A'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">ITR Total Income</span>
-                    <span className="font-medium text-right">
-                      {features.itr_total_income ? `₹${Number(features.itr_total_income).toLocaleString('en-IN')} L` : 'N/A'}
                     </span>
                   </div>
                 </div>
@@ -1362,7 +1516,7 @@ const CaseDetail = () => {
                   </div>
                 )}
 
-                {matchingEligibilityResults.length > 0 && (
+                {allEligibilityResults.length > 0 && (
                   <div className="p-4 rounded-lg border border-gray-200 bg-white">
                     <h4 className="font-semibold mb-3">Email Collaboration (Lender RM)</h4>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1373,12 +1527,12 @@ const CaseDetail = () => {
                           onChange={(e) => setEmailLenderKey(e.target.value)}
                           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                         >
-                          {matchingEligibilityResults.map((lender) => (
+                          {allEligibilityResults.map((lender) => (
                             <option
-                              key={`mail-lender-${lender.lender_name}-${lender.product_name}`}
+                              key={`mail-lender-${lender.lender_name}-${lender.product_name}-${lender.hard_filter_status}`}
                               value={`${lender.lender_name}::${lender.product_name}`}
                             >
-                              {lender.lender_name} • {lender.product_name}
+                              {lender.lender_name} • {lender.product_name} ({String(lender.hard_filter_status || '').toUpperCase()})
                             </option>
                           ))}
                         </select>

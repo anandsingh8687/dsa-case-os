@@ -72,6 +72,7 @@ class CaseResponse(BaseModel):
     industry_type: Optional[str] = None
     pincode: Optional[str] = None
     loan_amount_requested: Optional[float] = None
+    gstin: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
