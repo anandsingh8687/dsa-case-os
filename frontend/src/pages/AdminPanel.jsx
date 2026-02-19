@@ -8,6 +8,7 @@ import {
   getAdminCases,
   getAdminLogs,
   getAdminHealth,
+  getAdminLatency,
   getAdminUserUsage,
   getAdminActivityFeed,
 } from '../api/services';
@@ -49,6 +50,13 @@ const AdminPanel = () => {
     refetchInterval: 30000,
   });
 
+  const { data: latencyData } = useQuery({
+    queryKey: ['admin-latency'],
+    queryFn: getAdminLatency,
+    retry: 1,
+    refetchInterval: 30000,
+  });
+
   const { data: usageData, isLoading: usageLoading } = useQuery({
     queryKey: ['admin-user-usage', searchUser, usageDays],
     queryFn: () =>
@@ -73,6 +81,7 @@ const AdminPanel = () => {
   const health = healthData?.data;
   const usageRows = usageData?.data || [];
   const activityFeed = activityData?.data || [];
+  const latencyRows = latencyData?.data || [];
 
   const topStatuses = useMemo(() => {
     const distribution = stats?.status_distribution || {};
@@ -207,6 +216,38 @@ const AdminPanel = () => {
           )}
         </Card>
       </div>
+
+      <Card>
+        <h2 className="text-lg font-semibold text-gray-900 mb-3">API Latency (P95)</h2>
+        {latencyRows.length === 0 ? (
+          <p className="text-sm text-gray-500">No latency samples yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Route</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Count</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">P50</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">P95</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Max</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-100">
+                {latencyRows.slice(0, 10).map((row) => (
+                  <tr key={row.route_key}>
+                    <td className="px-4 py-2 text-xs text-gray-800">{row.route_key}</td>
+                    <td className="px-4 py-2 text-xs text-gray-700">{row.count}</td>
+                    <td className="px-4 py-2 text-xs text-gray-700">{Math.round(row.p50_ms)} ms</td>
+                    <td className="px-4 py-2 text-xs text-gray-700 font-medium">{Math.round(row.p95_ms)} ms</td>
+                    <td className="px-4 py-2 text-xs text-gray-700">{Math.round(row.max_ms)} ms</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
 
       <Card>
         <div className="flex items-center justify-between mb-4">

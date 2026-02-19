@@ -15,7 +15,10 @@ export const createCase = (caseData) =>
   apiClient.post('/cases/', caseData);
 
 export const getCases = (params) =>
-  apiClient.get('/cases/', { params });
+  apiClient.get('/cases/', {
+    params,
+    timeout: 15000,
+  });
 
 export const getCase = (caseId) =>
   apiClient.get(`/cases/${caseId}`);
@@ -145,6 +148,9 @@ export const getAdminLogs = (params) =>
 export const getAdminHealth = () =>
   apiClient.get('/admin/health');
 
+export const getAdminLatency = () =>
+  apiClient.get('/admin/latency');
+
 export const getAdminUserUsage = (params) =>
   apiClient.get('/admin/user-usage', { params });
 
@@ -209,10 +215,12 @@ export const updateSubmissionQuery = (queryId, payload) =>
   apiClient.patch(`/submissions/queries/${queryId}`, payload);
 
 // Bank Statement Analyzer
-export const processBankStatements = (formData) =>
+export const processBankStatements = (formData, config = {}) =>
   apiClient.post('/bank-statement/process', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     responseType: 'blob',
+    timeout: 240000,
+    ...config,
   });
 
 // Lenders

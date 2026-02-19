@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -12,13 +12,28 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState('');
+  const [showSlowLoadingHint, setShowSlowLoadingHint] = useState(false);
 
-  const { data: casesData, isLoading, error } = useQuery({
+  const { data: casesData, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: ['cases'],
     queryFn: () => getCases(),
-    retry: 2,
+    retry: 1,
     retryDelay: 1000,
+    refetchOnWindowFocus: false,
   });
+
+  useEffect(() => {
+    if (!isLoading) {
+      setShowSlowLoadingHint(false);
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setShowSlowLoadingHint(true);
+    }, 12000);
+
+    return () => window.clearTimeout(timer);
+  }, [isLoading]);
 
   const deleteCaseMutation = useMutation({
     mutationFn: (caseId) => deleteCase(caseId),
@@ -50,8 +65,18 @@ const Dashboard = () => {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-96">
+      <div className="flex flex-col items-center justify-center h-96 gap-4">
         <Loading size="lg" text="Loading cases..." />
+        {showSlowLoadingHint && (
+          <div className="max-w-md rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 text-center">
+            Dashboard is taking longer than usual because heavy document processing may be running.
+            <div className="mt-3">
+              <Button size="sm" variant="outline" onClick={() => refetch()}>
+                Retry Dashboard Load
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -74,6 +99,23 @@ const Dashboard = () => {
           New Case
         </Button>
       </div>
+
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          Could not load latest dashboard data right now. Please retry.
+          <button
+            type="button"
+            className="ml-2 underline font-medium"
+            onClick={() => refetch()}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {isFetching && !isLoading && (
+        <div className="mb-4 text-xs text-gray-500">Refreshing latest cases...</div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">

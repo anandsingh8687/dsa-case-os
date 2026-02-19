@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -31,6 +31,9 @@ const BankStatement = () => {
   const [files, setFiles] = useState([]);
   const [jsonPreview, setJsonPreview] = useState(null);
   const [analysisReady, setAnalysisReady] = useState(false);
+  const [analysisElapsedSeconds, setAnalysisElapsedSeconds] = useState(0);
+  const [analysisPhase, setAnalysisPhase] = useState('idle');
+  const [analysisUploadProgress, setAnalysisUploadProgress] = useState(0);
   const [convertInput, setConvertInput] = useState({
     borrower_name: '',
     entity_type: 'proprietorship',
@@ -44,12 +47,28 @@ const BankStatement = () => {
   );
 
   const processMutation = useMutation({
+    onMutate: () => {
+      setAnalysisReady(false);
+      setAnalysisPhase('uploading');
+      setAnalysisElapsedSeconds(0);
+      setAnalysisUploadProgress(0);
+      setJsonPreview(null);
+    },
     mutationFn: (selectedFiles) => {
       const formData = new FormData();
       selectedFiles.forEach((file) => {
         formData.append('files', file);
       });
-      return processBankStatements(formData);
+      return processBankStatements(formData, {
+        onUploadProgress: (event) => {
+          if (!event.total) return;
+          const pct = Math.round((event.loaded * 100) / event.total);
+          setAnalysisUploadProgress(pct);
+          if (pct >= 100) {
+            setAnalysisPhase('analyzing');
+          }
+        },
+      });
     },
     onSuccess: async (response) => {
       setAnalysisReady(true);
@@ -79,6 +98,10 @@ const BankStatement = () => {
       toast.success('Analysis complete. Excel downloaded.');
     },
     onError: async (error) => {
+      if (error?.code === 'ECONNABORTED') {
+        toast.error('Analyzer timed out. Try 1-3 statements per run for faster processing.');
+        return;
+      }
       const fallback = error.response?.data?.detail || 'Bank statement processing failed.';
       if (error.response?.data instanceof Blob) {
         try {
@@ -92,6 +115,9 @@ const BankStatement = () => {
         }
       }
       toast.error(fallback);
+    },
+    onSettled: () => {
+      setAnalysisPhase('idle');
     },
   });
 
@@ -112,6 +138,16 @@ const BankStatement = () => {
     }
     processMutation.mutate(files);
   };
+
+  useEffect(() => {
+    if (!processMutation.isPending) return undefined;
+
+    const interval = window.setInterval(() => {
+      setAnalysisElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [processMutation.isPending]);
 
   const caseUploadEligibleFiles = useMemo(
     () => files.filter((file) => /\.(pdf|zip|png|jpg|jpeg|tiff)$/i.test(file.name)),
@@ -238,7 +274,7 @@ const BankStatement = () => {
             {processMutation.isPending ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Processing...
+                {analysisPhase === 'analyzing' ? 'Analyzing Statements...' : 'Uploading Files...'}
               </>
             ) : (
               <>
@@ -259,6 +295,20 @@ const BankStatement = () => {
             Reset
           </Button>
         </div>
+
+        {processMutation.isPending && (
+          <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+            <div className="font-medium">
+              {analysisPhase === 'analyzing'
+                ? 'Upload complete. Analyzer is processing your statements on server.'
+                : 'Uploading bank statement files...'}
+            </div>
+            <div className="mt-1 text-xs text-blue-700">
+              Elapsed: {Math.floor(analysisElapsedSeconds / 60)}m {analysisElapsedSeconds % 60}s
+              {analysisPhase === 'analyzing' ? ' • Typical time: 1-3 minutes for large PDFs/ZIP' : ` • Upload: ${analysisUploadProgress}%`}
+            </div>
+          </div>
+        )}
       </Card>
 
       {analysisReady && (

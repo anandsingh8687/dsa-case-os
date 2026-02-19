@@ -72,6 +72,9 @@ const NewCase = () => {
   const [fileProgress, setFileProgress] = useState([]);
   const [gstData, setGstData] = useState(null);
   const [isCheckingGST, setIsCheckingGST] = useState(false);
+  const [uploadPhase, setUploadPhase] = useState('idle');
+  const [uploadElapsedSeconds, setUploadElapsedSeconds] = useState(0);
+  const [uploadEstimateMinutes, setUploadEstimateMinutes] = useState(0);
 
   const {
     register,
@@ -154,12 +157,24 @@ const NewCase = () => {
   };
 
   const uploadMutation = useMutation({
+    onMutate: ({ totalFileBytes }) => {
+      const estimate = Math.max(2, Math.ceil(totalFileBytes / (5 * 1024 * 1024)));
+      setUploadEstimateMinutes(estimate);
+      setUploadElapsedSeconds(0);
+      setUploadPhase('uploading');
+    },
     mutationFn: ({ caseId: currentCaseId, formData, totalFileBytes }) =>
       uploadDocuments(currentCaseId, formData, {
+        timeout: 600000,
         onUploadProgress: (event) => {
           if (!event.total) return;
           const overallProgress = Math.round((event.loaded * 100) / event.total);
           setUploadProgress(overallProgress);
+          if (overallProgress >= 100) {
+            setUploadPhase('server_processing');
+          } else {
+            setUploadPhase('uploading');
+          }
           updateProgressByLoadedBytes(
             Math.round((event.loaded / event.total) * totalFileBytes),
             totalFileBytes
@@ -169,6 +184,7 @@ const NewCase = () => {
     onSuccess: async (_response, variables) => {
       toast.success('Documents uploaded successfully! Processing...');
       setUploadProgress(100);
+      setUploadPhase('finishing');
       setFileProgress((prev) => prev.map((entry) => ({ ...entry, progress: 100 })));
 
       const finalStatus = await waitForProcessing(variables.caseId);
@@ -190,7 +206,15 @@ const NewCase = () => {
       void runPostUploadPipeline(variables.caseId);
     },
     onError: (error) => {
+      setUploadPhase('idle');
+      if (error?.code === 'ECONNABORTED') {
+        toast.error('Upload request timed out. Files may still be processing. Refresh dashboard and open the case once it appears.');
+        return;
+      }
       toast.error(error.response?.data?.detail || 'Failed to upload documents');
+    },
+    onSettled: () => {
+      setUploadPhase('idle');
     },
   });
 
@@ -374,6 +398,22 @@ const NewCase = () => {
       setValue('pincode', String(gstData.pincode));
     }
   }, [gstData, setValue]);
+
+  useEffect(() => {
+    if (!uploadMutation.isPending) return undefined;
+
+    const interval = window.setInterval(() => {
+      setUploadElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [uploadMutation.isPending]);
+
+  const uploadPhaseLabel = uploadPhase === 'server_processing'
+    ? 'Files uploaded. OCR, classification, and GST checks are running on server.'
+    : uploadPhase === 'finishing'
+      ? 'Finalizing extracted data and preparing next step...'
+      : 'Uploading files...';
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -681,6 +721,13 @@ const NewCase = () => {
 
           {uploadMutation.isPending && (
             <div className="mt-4 space-y-3">
+              <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                <div className="font-medium">{uploadPhaseLabel}</div>
+                <div className="mt-1 text-xs text-blue-700">
+                  Elapsed: {Math.floor(uploadElapsedSeconds / 60)}m {uploadElapsedSeconds % 60}s
+                  {uploadEstimateMinutes > 0 ? ` • Typical for this upload: ~${uploadEstimateMinutes}-${uploadEstimateMinutes + 2} min` : ''}
+                </div>
+              </div>
               <div>
                 <div className="flex justify-between text-sm mb-1">
                   <span className="text-gray-600">Upload Progress</span>
@@ -713,7 +760,9 @@ const NewCase = () => {
               onClick={handleStep2Submit}
               disabled={uploadMutation.isPending || files.length === 0}
             >
-              {uploadMutation.isPending ? 'Uploading & Extracting...' : 'Upload & Continue'}
+              {uploadMutation.isPending
+                ? (uploadPhase === 'server_processing' ? 'Processing Documents on Server...' : 'Uploading...')
+                : 'Upload & Continue'}
             </Button>
           </div>
         </Card>
@@ -799,6 +848,13 @@ const NewCase = () => {
 
           {uploadMutation.isPending && (
             <div className="mt-4 space-y-3">
+              <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                <div className="font-medium">{uploadPhaseLabel}</div>
+                <div className="mt-1 text-xs text-blue-700">
+                  Elapsed: {Math.floor(uploadElapsedSeconds / 60)}m {uploadElapsedSeconds % 60}s
+                  {uploadEstimateMinutes > 0 ? ` • Typical for this upload: ~${uploadEstimateMinutes}-${uploadEstimateMinutes + 2} min` : ''}
+                </div>
+              </div>
               <div>
                 <div className="flex justify-between text-sm mb-1">
                   <span className="text-gray-600">Upload Progress</span>
@@ -831,7 +887,9 @@ const NewCase = () => {
               onClick={handleStep2Submit}
               disabled={uploadMutation.isPending || files.length === 0}
             >
-              {uploadMutation.isPending ? 'Uploading...' : 'Upload & Continue'}
+              {uploadMutation.isPending
+                ? (uploadPhase === 'server_processing' ? 'Processing Documents on Server...' : 'Uploading...')
+                : 'Upload & Continue'}
             </Button>
           </div>
         </Card>

@@ -3,6 +3,7 @@ Extracts text from PDFs and images using PyMuPDF (for native PDFs) and Tesseract
 """
 import logging
 import time
+import asyncio
 from pathlib import Path
 from typing import Tuple
 import os
@@ -45,9 +46,9 @@ class OCRService:
         try:
             # Determine file type and route to appropriate handler
             if mime_type == 'application/pdf' or file_path.lower().endswith('.pdf'):
-                result = await self._extract_from_pdf(file_path)
+                result = await asyncio.to_thread(self._extract_from_pdf, file_path)
             elif mime_type.startswith('image/') or self._is_image_file(file_path):
-                result = await self._extract_from_image(file_path)
+                result = await asyncio.to_thread(self._extract_from_image, file_path)
             else:
                 raise ValueError(f"Unsupported file type: {mime_type}")
 
@@ -64,7 +65,7 @@ class OCRService:
             logger.error(f"OCR failed for {file_path}: {str(e)}", exc_info=True)
             raise
 
-    async def _extract_from_pdf(self, file_path: str) -> OCRResult:
+    def _extract_from_pdf(self, file_path: str) -> OCRResult:
         """
         Extract text from PDF using PyMuPDF first, falling back to Tesseract if needed.
 
@@ -255,7 +256,7 @@ class OCRService:
 
         return full_text, avg_confidence
 
-    async def _extract_from_image(self, file_path: str) -> OCRResult:
+    def _extract_from_image(self, file_path: str) -> OCRResult:
         """
         Extract text from image file using Tesseract OCR.
 

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core.latency_metrics import get_latency_snapshot
 from app.core.deps import CurrentAdmin
 from app.db.database import get_db_session
 
@@ -90,6 +91,14 @@ class ActivityEventRow(BaseModel):
     actor_email: Optional[str] = None
     actor_name: Optional[str] = None
     details: str
+
+
+class LatencyMetricRow(BaseModel):
+    route_key: str
+    count: int
+    p50_ms: float
+    p95_ms: float
+    max_ms: float
 
 
 @router.get("/stats", response_model=PlatformStats)
@@ -252,6 +261,25 @@ async def list_users_ops(
         )
         for row in rows
     ]
+
+
+@router.get("/latency", response_model=List[LatencyMetricRow])
+async def get_latency_metrics(current_user: CurrentAdmin):
+    """Expose API route latency quantiles (p50/p95) for operations monitoring."""
+    snapshot = get_latency_snapshot()
+    rows: List[LatencyMetricRow] = []
+    for route_key, metrics in snapshot.items():
+        rows.append(
+            LatencyMetricRow(
+                route_key=route_key,
+                count=int(metrics.get("count", 0)),
+                p50_ms=float(metrics.get("p50_ms", 0.0)),
+                p95_ms=float(metrics.get("p95_ms", 0.0)),
+                max_ms=float(metrics.get("max_ms", 0.0)),
+            )
+        )
+    rows.sort(key=lambda item: item.p95_ms, reverse=True)
+    return rows[:25]
 
 
 @router.get("/cases", response_model=List[CaseOpsRow])

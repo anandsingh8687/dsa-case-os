@@ -2,6 +2,7 @@
 import io
 import mimetypes
 import zipfile
+import re
 from typing import List, Optional, BinaryIO, Tuple
 from pathlib import Path
 from uuid import UUID
@@ -33,6 +34,7 @@ MAX_CASE_UPLOAD_BYTES = settings.MAX_CASE_UPLOAD_MB * 1024 * 1024
 # Files/folders to ignore in ZIP extraction
 IGNORED_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 IGNORED_FOLDERS = {"__MACOSX", ".git", ".svn"}
+GSTIN_FILENAME_REGEX = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]\b", re.IGNORECASE)
 
 
 class CaseEntryService:
@@ -242,6 +244,53 @@ class CaseEntryService:
             storage_key: Storage key for the file
         """
         try:
+            # Fast filename classification pass first to avoid unnecessary OCR on obvious docs.
+            filename_classification = classify_document("", filename=document.original_filename)
+
+            from app.core.enums import DocumentType
+
+            def _should_skip_ocr(initial_doc_type: DocumentType) -> bool:
+                filename_lower = (document.original_filename or "").lower()
+                is_photo = "photo" in filename_lower or filename_lower.endswith((".jpg", ".jpeg", ".png"))
+
+                if initial_doc_type == DocumentType.BANK_STATEMENT:
+                    return True
+                if initial_doc_type == DocumentType.GST_RETURNS:
+                    # Most GST return files carry GSTIN in filename; skip heavy OCR if available.
+                    return bool(self._extract_gstin_from_filename(document.original_filename))
+                if initial_doc_type == DocumentType.GST_CERTIFICATE:
+                    return False
+                if initial_doc_type in {
+                    DocumentType.PAN_PERSONAL,
+                    DocumentType.PAN_BUSINESS,
+                    DocumentType.AADHAAR,
+                    DocumentType.CIBIL_REPORT,
+                }:
+                    return False
+                if initial_doc_type == DocumentType.UNKNOWN and is_photo:
+                    return True
+                return initial_doc_type != DocumentType.UNKNOWN
+
+            if filename_classification.doc_type.value != "unknown":
+                document.doc_type = filename_classification.doc_type.value
+                document.classification_confidence = filename_classification.confidence
+                document.status = DocumentStatus.CLASSIFIED.value
+                await self.db.flush()
+
+                # If GST doc has GSTIN in filename, fetch GST data without OCR.
+                if filename_classification.doc_type in [DocumentType.GST_CERTIFICATE, DocumentType.GST_RETURNS]:
+                    gstin_from_filename = self._extract_gstin_from_filename(document.original_filename)
+                    if gstin_from_filename:
+                        await self._fetch_and_apply_gst_data(document, gstin_from_filename)
+
+                if _should_skip_ocr(filename_classification.doc_type):
+                    logger.info(
+                        "Skipping OCR for %s (doc_type=%s, filename-first classification)",
+                        document.original_filename,
+                        filename_classification.doc_type.value,
+                    )
+                    return
+
             # Get file path from storage
             file_path = self.storage.get_file_path(storage_key)
 
@@ -268,8 +317,7 @@ class CaseEntryService:
                 document.classification_confidence = classification_result.confidence
                 document.status = DocumentStatus.CLASSIFIED.value
 
-                await self.db.commit()
-                await self.db.refresh(document)
+                await self.db.flush()
 
                 logger.info(
                     f"Document {document.id} classified as {classification_result.doc_type.value} "
@@ -278,7 +326,6 @@ class CaseEntryService:
 
                 # === AUTO-EXTRACT GSTIN AND CALL GST API ===
                 # Check if document is GST-related
-                from app.core.enums import DocumentType
                 if classification_result.doc_type in [DocumentType.GST_CERTIFICATE, DocumentType.GST_RETURNS]:
                     await self._extract_and_fetch_gst_data(document, ocr_result.text)
 
@@ -293,8 +340,7 @@ class CaseEntryService:
                     document.classification_confidence = classification_result.confidence
                     document.status = DocumentStatus.CLASSIFIED.value
 
-                    await self.db.commit()
-                    await self.db.refresh(document)
+                    await self.db.flush()
 
                     logger.info(
                         f"Document {document.id} classified from filename as {classification_result.doc_type.value} "
@@ -302,7 +348,6 @@ class CaseEntryService:
                     )
 
                     # Try GST extraction even when OCR text is short; GSTIN may still be present.
-                    from app.core.enums import DocumentType
                     if classification_result.doc_type in [DocumentType.GST_CERTIFICATE, DocumentType.GST_RETURNS]:
                         await self._extract_and_fetch_gst_data(
                             document,
@@ -656,6 +701,16 @@ class CaseEntryService:
                 return
 
             logger.info(f"Found GSTIN {gstin} in document {document.id}")
+            await self._fetch_and_apply_gst_data(document, gstin)
+
+        except Exception as e:
+            logger.error(f"Failed to extract/fetch GST data for document {document.id}: {e}", exc_info=True)
+            # Don't fail the document processing if GST fetch fails
+
+    async def _fetch_and_apply_gst_data(self, document: Document, gstin: str) -> None:
+        """Fetch GST details and apply data to case."""
+        try:
+            gst_service = get_gst_api_service()
 
             # Get the case
             case = await self.db.get(Case, document.case_id)
@@ -676,7 +731,7 @@ class CaseEntryService:
                 logger.warning(f"Failed to fetch GST data for GSTIN {gstin}")
                 # Still save the GSTIN even if API call failed
                 case.gstin = gstin
-                await self.db.commit()
+                await self.db.flush()
                 return
 
             # Update case with GST data
@@ -700,8 +755,7 @@ class CaseEntryService:
             if gst_data.get("industry_type") and not case.industry_type:
                 case.industry_type = gst_data["industry_type"]
 
-            await self.db.commit()
-            await self.db.refresh(case)
+            await self.db.flush()
 
             logger.info(
                 f"Successfully saved GST data for case {case.case_id}: "
@@ -711,5 +765,11 @@ class CaseEntryService:
             )
 
         except Exception as e:
-            logger.error(f"Failed to extract/fetch GST data for document {document.id}: {e}", exc_info=True)
+            logger.error(f"Failed to fetch/apply GST data for document {document.id}: {e}", exc_info=True)
             # Don't fail the document processing if GST fetch fails
+
+    def _extract_gstin_from_filename(self, filename: Optional[str]) -> Optional[str]:
+        if not filename:
+            return None
+        match = GSTIN_FILENAME_REGEX.search(filename.upper())
+        return match.group(0) if match else None

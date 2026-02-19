@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/bank-statement", tags=["bank-statement"])
 
 EXTERNAL_API_URL = "https://skill-deploy-wudy4wwji7-codex-agent-deploys.vercel.app/api/process"
+EXTERNAL_API_TIMEOUT_SECONDS = 210.0
 
 
 @router.post("/process")
@@ -34,7 +35,7 @@ async def process_bank_statements(
             logger.info(f"Prepared file: {file.filename} ({len(content)} bytes)")
 
         # Forward request to external API
-        async with httpx.AsyncClient(timeout=300.0) as client:  # 5 minute timeout
+        async with httpx.AsyncClient(timeout=EXTERNAL_API_TIMEOUT_SECONDS) as client:
             logger.info(f"Forwarding request to {EXTERNAL_API_URL}")
             response = await client.post(
                 EXTERNAL_API_URL,
@@ -78,10 +79,13 @@ async def process_bank_statements(
                 )
 
     except httpx.TimeoutException:
-        logger.error("Request to external API timed out")
+        logger.error("Request to external API timed out after %.0fs", EXTERNAL_API_TIMEOUT_SECONDS)
         raise HTTPException(
             status_code=504,
-            detail="Request to external API timed out. Please try again."
+            detail=(
+                "Bank statement analyzer timed out while processing this file set. "
+                "Try smaller batches (1-3 statements) and re-run."
+            )
         )
     except httpx.RequestError as e:
         logger.error(f"Request error: {str(e)}")

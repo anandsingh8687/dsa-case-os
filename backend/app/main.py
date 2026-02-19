@@ -1,14 +1,17 @@
 """FastAPI Application Entry Point."""
 import os
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from app.core.config import settings
+from app.core.latency_metrics import record_latency
 from app.db.database import init_db, close_db
 from app.api.v1.endpoints import (
     auth, cases, documents, extraction,
@@ -93,6 +96,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def latency_tracking_middleware(request: Request, call_next):
+    """Track request latency for p95 observability."""
+    started_at = time.perf_counter()
+    response = await call_next(request)
+
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", request.url.path)
+    metric_key = f"{request.method} {route_path}"
+
+    # Capture only API metrics to keep cardinality stable.
+    if route_path.startswith(settings.API_PREFIX):
+        record_latency(metric_key, elapsed_ms)
+
+    return response
 
 # ─── Route Registration ───────────────────────────────────────
 # Each router already defines its own prefix (e.g. /auth, /cases)

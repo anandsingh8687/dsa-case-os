@@ -1,5 +1,6 @@
 """Document processing orchestration - coordinates OCR and DB updates."""
 import logging
+import asyncio
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -9,6 +10,7 @@ from app.services.stages.stage1_ocr import ocr_service
 from app.schemas.shared import OCRResult
 
 logger = logging.getLogger(__name__)
+OCR_TIMEOUT_SECONDS = 12
 
 
 class DocumentProcessor:
@@ -42,10 +44,26 @@ class DocumentProcessor:
 
             # Run OCR
             logger.info(f"Starting OCR for document {document_id} ({document.original_filename})")
-            ocr_result = await ocr_service.extract_text(
-                file_path=file_path,
-                mime_type=document.mime_type or ""
-            )
+            try:
+                ocr_result = await asyncio.wait_for(
+                    ocr_service.extract_text(
+                        file_path=file_path,
+                        mime_type=document.mime_type or ""
+                    ),
+                    timeout=OCR_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "OCR timed out for document %s after %ss; continuing with empty OCR output",
+                    document_id,
+                    OCR_TIMEOUT_SECONDS,
+                )
+                ocr_result = OCRResult(
+                    text="",
+                    confidence=0.0,
+                    page_count=0,
+                    method="timeout",
+                )
 
             # Update document in DB
             document.ocr_text = ocr_result.text
@@ -53,8 +71,7 @@ class DocumentProcessor:
             document.page_count = ocr_result.page_count
             document.status = "ocr_complete"
 
-            await db.commit()
-            await db.refresh(document)
+            await db.flush()
 
             logger.info(
                 f"OCR completed for document {document_id} | "
@@ -64,7 +81,6 @@ class DocumentProcessor:
             return ocr_result
 
         except Exception as e:
-            await db.rollback()
             logger.error(f"OCR processing failed for document {document_id}: {str(e)}", exc_info=True)
 
             # Mark document as failed
@@ -74,7 +90,7 @@ class DocumentProcessor:
                 document = result.scalar_one_or_none()
                 if document:
                     document.status = "failed"
-                    await db.commit()
+                    await db.flush()
             except:
                 pass
 
