@@ -119,6 +119,16 @@ const extractApiErrorMessage = (error, fallback = 'Request failed') => {
   return fallback;
 };
 
+const isRetryablePipelineError = (error) => {
+  const statusCode = error?.response?.status;
+  if (!statusCode) return true;
+  return [408, 429, 500, 502, 503, 504].includes(statusCode);
+};
+
+const waitMs = (ms) => new Promise((resolve) => {
+  window.setTimeout(resolve, ms);
+});
+
 const parseInterestRange = (rawRange) => {
   if (!rawRange || typeof rawRange !== 'string') return null;
   const nums = rawRange.match(/\\d+(?:\\.\\d+)?/g);
@@ -586,20 +596,32 @@ const CaseDetail = () => {
       const startedAt = performance.now();
       let stage = 'extraction';
       let stageStartedAt = performance.now();
+      const runStageWithRetry = async (fn) => {
+        try {
+          return await fn();
+        } catch (error) {
+          if (!isRetryablePipelineError(error)) {
+            throw error;
+          }
+          await waitMs(1200);
+          return fn();
+        }
+      };
       try {
-        const extractionResponse = await runExtraction(caseId);
+        const extractionResponse = await runStageWithRetry(() => runExtraction(caseId));
         timings.extraction = Number((performance.now() - stageStartedAt).toFixed(0));
         timings.extraction_backend = extractionResponse?.data?.timing_ms || null;
 
         stage = 'scoring';
         stageStartedAt = performance.now();
-        await runScoring(caseId);
+        await runStageWithRetry(() => runScoring(caseId));
         timings.scoring = Number((performance.now() - stageStartedAt).toFixed(0));
 
         stage = 'report';
         stageStartedAt = performance.now();
-        await generateReport(caseId);
+        const reportResponse = await runStageWithRetry(() => generateReport(caseId));
         timings.report = Number((performance.now() - stageStartedAt).toFixed(0));
+        timings.report_backend = reportResponse?.data?.timing_ms || null;
 
         timings.total = Number((performance.now() - startedAt).toFixed(0));
         return timings;
