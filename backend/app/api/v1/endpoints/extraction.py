@@ -245,6 +245,43 @@ async def trigger_extraction(
                             source="bank_analysis"
                         ))
 
+                    credilo_summary_fields = [
+                        ("credilo_total_input_files", "total_input_files"),
+                        ("credilo_total_transactions", "total_transactions"),
+                        ("credilo_statement_count", "statement_count"),
+                        ("credilo_period_start", "period_start"),
+                        ("credilo_period_end", "period_end"),
+                        ("credilo_average_balance", "average_balance"),
+                        ("credilo_custom_average_balance", "custom_average_balance"),
+                        (
+                            "credilo_custom_average_balance_last_three_month",
+                            "custom_average_balance_last_three_month",
+                        ),
+                        ("credilo_credit_transactions_amount", "credit_transactions_amount"),
+                        ("credilo_debit_transactions_amount", "debit_transactions_amount"),
+                        ("credilo_net_credit_transactions_amount", "net_credit_transactions_amount"),
+                        ("credilo_net_debit_transactions_amount", "net_debit_transactions_amount"),
+                        ("credilo_no_of_emi", "no_of_emi"),
+                        ("credilo_total_emi_amount", "total_emi_amount"),
+                        ("credilo_no_of_emi_bounce", "no_of_emi_bounce"),
+                        ("credilo_total_emi_bounce_amount", "total_emi_bounce_amount"),
+                        ("credilo_no_of_loan_disbursal", "no_of_loan_disbursal"),
+                        ("credilo_loan_disbursal_amount", "loan_disbursal_amount"),
+                    ]
+
+                    for field_name, summary_key in credilo_summary_fields:
+                        value = bank_result.credilo_summary.get(summary_key)
+                        if value is None:
+                            continue
+                        bank_fields.append(
+                            ExtractedFieldItem(
+                                field_name=field_name,
+                                field_value=str(value),
+                                confidence=bank_result.confidence,
+                                source="bank_analysis",
+                            )
+                        )
+
                     # Save bank analysis fields
                     if bank_fields:
                         await assembler.save_extracted_fields(
@@ -264,6 +301,8 @@ async def trigger_extraction(
                         "transaction_count": bank_result.transaction_count,
                         "statement_period_months": bank_result.statement_period_months,
                         "confidence": bank_result.confidence,
+                        "source": bank_result.source,
+                        "credilo_summary": bank_result.credilo_summary or None,
                         "note": (
                             f"Used latest {len(analyzed_pdf_paths)} statements for faster analysis"
                             if len(bank_pdf_paths) > len(analyzed_pdf_paths)

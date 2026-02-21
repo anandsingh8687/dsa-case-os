@@ -236,8 +236,10 @@ class BankAnalysisResult(BaseModel):
     total_debits_12m: Optional[float] = None
 
     # Per-month breakdown
-    monthly_summary: List[Dict[str, Any]] = []
+    monthly_summary: List[Dict[str, Any]] = Field(default_factory=list)
     confidence: float = 0.0
+    source: Optional[str] = None
+    credilo_summary: Dict[str, Any] = Field(default_factory=dict)
 
 
 # ─── Eligibility ───────────────────────────────────────────────

@@ -70,6 +70,23 @@ class Settings(BaseSettings):
     # WhatsApp Service
     WHATSAPP_SERVICE_URL: str = os.getenv("WHATSAPP_SERVICE_URL", "http://localhost:3001")
 
+    # Credilo Bank Parser Integration
+    CREDILO_API_BASE_URL: str = os.getenv(
+        "CREDILO_API_BASE_URL",
+        "https://skill-deploy-wudy4wwji7-codex-agent-deploys.vercel.app",
+    )
+    CREDILO_PROCESS_PATH: str = os.getenv("CREDILO_PROCESS_PATH", "/api/process")
+    CREDILO_PREVIEW_PATH: str = os.getenv("CREDILO_PREVIEW_PATH", "/api/process-preview")
+    CREDILO_TIMEOUT_SECONDS: float = float(os.getenv("CREDILO_TIMEOUT_SECONDS", "210"))
+    CREDILO_USE_REMOTE_IN_EXTRACTION: bool = os.getenv(
+        "CREDILO_USE_REMOTE_IN_EXTRACTION",
+        "true",
+    ).lower() == "true"
+    CREDILO_FALLBACK_TO_LOCAL: bool = os.getenv(
+        "CREDILO_FALLBACK_TO_LOCAL",
+        "true",
+    ).lower() == "true"
+
     # Case ID Format
     CASE_ID_PREFIX: str = "CASE"
 

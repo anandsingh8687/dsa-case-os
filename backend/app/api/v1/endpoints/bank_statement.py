@@ -7,11 +7,14 @@ from typing import List
 import httpx
 import logging
 
+from app.services.credilo_api_client import CrediloApiClient
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/bank-statement", tags=["bank-statement"])
 
-EXTERNAL_API_URL = "https://skill-deploy-wudy4wwji7-codex-agent-deploys.vercel.app/api/process"
-EXTERNAL_API_TIMEOUT_SECONDS = 210.0
+_credilo_client = CrediloApiClient()
+EXTERNAL_API_URL = _credilo_client.process_url
+EXTERNAL_API_TIMEOUT_SECONDS = _credilo_client.timeout_seconds
 
 
 @router.post("/process")
@@ -23,6 +26,12 @@ async def process_bank_statements(
     This avoids CORS issues by making the request from backend.
     """
     try:
+        if not EXTERNAL_API_URL:
+            raise HTTPException(
+                status_code=503,
+                detail="Credilo process endpoint is not configured",
+            )
+
         logger.info(f"Received {len(files)} file(s) for bank statement processing")
 
         # Prepare files for forwarding
@@ -93,6 +102,8 @@ async def process_bank_statements(
             status_code=503,
             detail=f"Failed to connect to external API: {str(e)}"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         raise HTTPException(

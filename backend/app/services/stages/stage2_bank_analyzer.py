@@ -4,12 +4,14 @@ Uses Credilo parser for PDF extraction, then computes metrics.
 """
 import logging
 import asyncio
-from typing import List, Dict, Any, Optional
-from datetime import datetime, date
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime, date, timezone
 from collections import defaultdict
 from decimal import Decimal
 
-from app.services.credilo_parser import StatementParser, ParsedStatement
+from app.core.config import settings
+from app.services.credilo_api_client import CrediloApiClient, CrediloApiError
+from app.services.credilo_parser import StatementParser
 from app.schemas.shared import BankAnalysisResult
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,9 @@ class BankStatementAnalyzer:
 
     def __init__(self):
         self.parser = StatementParser()
+        self.credilo_client = CrediloApiClient()
+        self.use_remote = bool(settings.CREDILO_USE_REMOTE_IN_EXTRACTION)
+        self.allow_local_fallback = bool(settings.CREDILO_FALLBACK_TO_LOCAL)
 
     async def analyze(self, pdf_paths: List[str]) -> BankAnalysisResult:
         """
@@ -58,15 +63,25 @@ class BankStatementAnalyzer:
         Returns:
             BankAnalysisResult with computed metrics
         """
-        # Step 1: Parse with Credilo
+        if self.use_remote:
+            try:
+                return await self._analyze_with_remote_credilo(pdf_paths)
+            except Exception as exc:
+                logger.warning("Remote Credilo preview failed: %s", exc)
+                if not self.allow_local_fallback:
+                    return BankAnalysisResult(confidence=0.0, source="credilo_remote")
+
+        return await self._analyze_with_local_parser(pdf_paths)
+
+    async def _analyze_with_local_parser(self, pdf_paths: List[str]) -> BankAnalysisResult:
+        """Analyze statements using local parser fallback."""
         # Offload parser work so endpoint-level asyncio timeouts can actually preempt long runs.
         statements = await asyncio.to_thread(self.parser.parse_statements, pdf_paths)
 
         if not statements:
             logger.warning("No statements parsed from PDFs")
-            return BankAnalysisResult(confidence=0.0)
+            return BankAnalysisResult(confidence=0.0, source="local_parser")
 
-        # Step 2: Aggregate all transactions
         all_transactions = []
         bank_names = set()
         account_numbers = set()
@@ -76,22 +91,42 @@ class BankStatementAnalyzer:
             bank_names.add(statement.bank_name)
             account_numbers.add(statement.account_number)
 
-        # Use first bank/account if multiple detected
         bank_detected = list(bank_names)[0] if bank_names else None
         account_number = list(account_numbers)[0] if account_numbers else None
 
-        # Step 3: Compute metrics
         return await self.analyze_from_transactions(
             transactions=all_transactions,
             bank_detected=bank_detected,
-            account_number=account_number
+            account_number=account_number,
+            source="local_parser",
+        )
+
+    async def _analyze_with_remote_credilo(self, pdf_paths: List[str]) -> BankAnalysisResult:
+        """Analyze statements using remote Credilo preview endpoint."""
+        if not self.credilo_client.is_configured():
+            raise CrediloApiError("Credilo preview URL is not configured")
+
+        payload = await self.credilo_client.process_preview(pdf_paths)
+        transactions, bank_detected, account_number, credilo_summary = self._extract_remote_payload(payload)
+
+        if not transactions:
+            raise CrediloApiError("Credilo preview returned no transactions")
+
+        return await self.analyze_from_transactions(
+            transactions=transactions,
+            bank_detected=bank_detected,
+            account_number=account_number,
+            source="credilo_remote",
+            credilo_summary=credilo_summary,
         )
 
     async def analyze_from_transactions(
         self,
         transactions: List[Dict[str, Any]],
         bank_detected: Optional[str] = None,
-        account_number: Optional[str] = None
+        account_number: Optional[str] = None,
+        source: str = "unknown",
+        credilo_summary: Optional[Dict[str, Any]] = None,
     ) -> BankAnalysisResult:
         """
         Compute metrics from pre-parsed transactions.
@@ -104,17 +139,21 @@ class BankStatementAnalyzer:
         Returns:
             BankAnalysisResult with computed metrics
         """
-        if not transactions:
+        normalized_transactions = self._normalize_transactions(transactions)
+
+        if not normalized_transactions:
             return BankAnalysisResult(
                 bank_detected=bank_detected,
                 account_number=account_number,
                 transaction_count=0,
-                confidence=0.0
+                confidence=0.0,
+                source=source,
+                credilo_summary=credilo_summary or {},
             )
 
         # Sort transactions by date
         sorted_transactions = sorted(
-            transactions,
+            normalized_transactions,
             key=lambda t: t.get('transactionDate', date.min)
         )
 
@@ -158,8 +197,171 @@ class BankStatementAnalyzer:
             total_credits_12m=total_credits_12m,
             total_debits_12m=total_debits_12m,
             monthly_summary=monthly_summary,
-            confidence=confidence
+            confidence=confidence,
+            source=source,
+            credilo_summary=credilo_summary or {},
         )
+
+    def _extract_remote_payload(
+        self,
+        payload: Dict[str, Any],
+    ) -> Tuple[List[Dict[str, Any]], Optional[str], Optional[str], Dict[str, Any]]:
+        """Extract and flatten transactions from Credilo preview payload."""
+        statements = payload.get("statements") if isinstance(payload, dict) else []
+        if not isinstance(statements, list):
+            statements = []
+
+        all_transactions: List[Dict[str, Any]] = []
+        bank_detected: Optional[str] = None
+        account_number: Optional[str] = None
+
+        for statement in statements:
+            if not isinstance(statement, dict):
+                continue
+
+            basic_info = statement.get("basicInfo") or {}
+            bank_detected = bank_detected or statement.get("bank") or basic_info.get("bankName")
+            account_number = account_number or statement.get("accountNumber") or basic_info.get("accountNumber")
+
+            statement_tx = statement.get("transactions") or []
+            if isinstance(statement_tx, list):
+                all_transactions.extend(statement_tx)
+
+        first_statement = statements[0] if statements and isinstance(statements[0], dict) else {}
+        basic_info = first_statement.get("basicInfo") or {}
+        cam = first_statement.get("camAnalysisData") or {}
+        grand = first_statement.get("grandTotal") or {}
+
+        credilo_summary = {
+            "statement_count": len(statements),
+            "total_input_files": self._to_int(payload.get("totalInputFiles")),
+            "total_transactions": self._to_int(payload.get("totalTransactions")) or len(all_transactions),
+            "period_start": basic_info.get("periodStart"),
+            "period_end": basic_info.get("periodEnd"),
+            "average_balance": self._to_optional_float(cam.get("averageBalance")),
+            "custom_average_balance": self._to_optional_float(cam.get("customAverageBalance")),
+            "custom_average_balance_last_three_month": self._to_optional_float(
+                cam.get("customAverageBalanceLastThreeMonth")
+            ),
+            "credit_transactions_amount": self._to_optional_float(grand.get("creditTransactionsAmount")),
+            "debit_transactions_amount": self._to_optional_float(grand.get("debitTransactionsAmount")),
+            "net_credit_transactions_amount": self._to_optional_float(grand.get("netCreditTransactionsAmount")),
+            "net_debit_transactions_amount": self._to_optional_float(grand.get("netDebitTransactionsAmount")),
+            "no_of_emi": self._to_int(grand.get("noOfEMI")),
+            "total_emi_amount": self._to_optional_float(grand.get("totalEMIAmount")),
+            "no_of_emi_bounce": self._to_int(grand.get("noOfEMIBounce")),
+            "total_emi_bounce_amount": self._to_optional_float(grand.get("totalEMIBounceAmount")),
+            "no_of_loan_disbursal": self._to_int(grand.get("noOfLoanDisbursal")),
+            "loan_disbursal_amount": self._to_optional_float(grand.get("loanDisbursalAmount")),
+        }
+
+        return all_transactions, bank_detected, account_number, credilo_summary
+
+    def _normalize_transactions(self, transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Normalize parser transactions to expected analyzer schema."""
+        normalized = []
+        for txn in transactions or []:
+            if not isinstance(txn, dict):
+                continue
+
+            transaction_date = self._coerce_to_date(txn.get("transactionDate") or txn.get("valueDate"))
+            if not transaction_date:
+                continue
+
+            normalized.append(
+                {
+                    "transactionDate": transaction_date,
+                    "valueDate": self._coerce_to_date(txn.get("valueDate")) or transaction_date,
+                    "narration": str(txn.get("narration") or "").strip(),
+                    "chequeRefNo": str(txn.get("chequeRefNo") or txn.get("cheque") or "").strip(),
+                    "withdrawalAmt": self._to_float(txn.get("withdrawalAmt")),
+                    "depositAmt": self._to_float(txn.get("depositAmt")),
+                    "closingBalance": self._to_optional_float(txn.get("closingBalance")),
+                }
+            )
+
+        return normalized
+
+    def _coerce_to_date(self, value: Any) -> Optional[date]:
+        """Convert parser date values to date object."""
+        if value is None:
+            return None
+
+        if isinstance(value, datetime):
+            return value.date()
+
+        if isinstance(value, date):
+            return value
+
+        if isinstance(value, (int, float, Decimal)):
+            raw = float(value)
+            if raw <= 0:
+                return None
+
+            # Credilo uses epoch milliseconds.
+            if raw > 10_000_000_000:
+                raw = raw / 1000.0
+
+            try:
+                return datetime.fromtimestamp(raw, tz=timezone.utc).date()
+            except (OSError, OverflowError, ValueError):
+                return None
+
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+
+            if text.isdigit():
+                return self._coerce_to_date(int(text))
+
+            for fmt in (
+                "%d/%m/%Y",
+                "%d-%m-%Y",
+                "%Y-%m-%d",
+                "%Y/%m/%d",
+                "%d %b %Y",
+                "%d %B %Y",
+            ):
+                try:
+                    return datetime.strptime(text, fmt).date()
+                except ValueError:
+                    continue
+
+            try:
+                return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+            except ValueError:
+                return None
+
+        return None
+
+    def _to_optional_float(self, value: Any) -> Optional[float]:
+        """Convert parser number-like values to float, preserving None."""
+        if value is None or value == "":
+            return None
+        return self._to_float(value)
+
+    def _to_float(self, value: Any) -> float:
+        """Convert parser number-like values to float."""
+        if value is None or value == "":
+            return 0.0
+        if isinstance(value, str):
+            value = value.replace(",", "").strip()
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _to_int(self, value: Any) -> int:
+        """Convert parser number-like values to int."""
+        if value is None or value == "":
+            return 0
+        if isinstance(value, str):
+            value = value.replace(",", "").strip()
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return 0
 
     def _calculate_months_between(self, start_date: date, end_date: date) -> int:
         """Calculate number of months between two dates."""

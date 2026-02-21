@@ -821,3 +821,65 @@ async def test_total_credits_and_debits(analyzer):
 
     assert result.total_credits_12m == 60000.0  # 50000 + 10000
     assert result.total_debits_12m == 20000.0
+
+
+@pytest.mark.asyncio
+async def test_epoch_millisecond_transactions_are_normalized(analyzer):
+    """Test analyzer accepts Credilo-style epoch millisecond transaction dates."""
+    transactions = [
+        {
+            "transactionDate": 1704067200000,  # 2024-01-01
+            "valueDate": 1704067200000,
+            "narration": "SALARY CREDIT",
+            "chequeRefNo": "",
+            "withdrawalAmt": 0,
+            "depositAmt": "75,000.50",
+            "closingBalance": "125000.75",
+        },
+        {
+            "transactionDate": "1704585600000",  # 2024-01-07
+            "valueDate": "1704585600000",
+            "narration": "HDFC LOAN EMI",
+            "chequeRefNo": "",
+            "withdrawalAmt": "15,000",
+            "depositAmt": 0,
+            "closingBalance": 110000.75,
+        },
+    ]
+
+    result = await analyzer.analyze_from_transactions(transactions, source="credilo_remote")
+
+    assert result.transaction_count == 2
+    assert result.statement_period_months == 1
+    assert result.monthly_credit_avg == 75000.5
+    assert result.monthly_debit_avg == 15000.0
+    assert result.source == "credilo_remote"
+
+
+@pytest.mark.asyncio
+async def test_credilo_summary_metadata_is_preserved(analyzer):
+    """Test credilo summary metadata is carried through analysis result."""
+    transactions = [
+        create_sample_transaction(
+            txn_date=date(2024, 1, 5),
+            narration="SALARY CREDIT",
+            deposit_amt=50000.0,
+            closing_balance=100000.0,
+        )
+    ]
+
+    summary = {
+        "statement_count": 1,
+        "total_transactions": 42,
+        "custom_average_balance": 98000.25,
+    }
+    result = await analyzer.analyze_from_transactions(
+        transactions=transactions,
+        source="credilo_remote",
+        credilo_summary=summary,
+    )
+
+    assert result.source == "credilo_remote"
+    assert result.credilo_summary.get("statement_count") == 1
+    assert result.credilo_summary.get("total_transactions") == 42
+    assert result.credilo_summary.get("custom_average_balance") == 98000.25
