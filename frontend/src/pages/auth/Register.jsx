@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { register as registerUser, login, getCurrentUser } from '../../api/services';
 import { setToken, setUser } from '../../utils/auth';
 import { Button, Input, Card } from '../../components/ui';
+import crediloLogo from '../../assets/credilo-logo.svg';
 
 const Register = () => {
   const [isLoading, setIsLoading] = useState(false);
@@ -62,6 +63,11 @@ const Register = () => {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-blue-100 flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <div className="text-center mb-8">
+          <img
+            src={crediloLogo}
+            alt="Credilo logo"
+            className="w-14 h-14 rounded-xl object-cover mx-auto mb-3 shadow-sm"
+          />
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Credilo</h1>
           <p className="text-gray-600">Create your account</p>
         </div>

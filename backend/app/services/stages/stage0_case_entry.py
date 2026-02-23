@@ -14,6 +14,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import selectinload
 
 from app.models.case import Case, Document, DocumentProcessingJob
+from app.models.user import User
 from app.schemas.shared import CaseCreate, CaseResponse, CaseUpdate, DocumentResponse
 from app.core.enums import CaseStatus, DocumentStatus
 from app.core.config import settings
@@ -46,7 +47,7 @@ class CaseEntryService:
 
     async def create_case(
         self,
-        user_id: UUID,
+        current_user: User,
         case_data: Optional[CaseCreate] = None
     ) -> CaseResponse:
         """
@@ -66,7 +67,8 @@ class CaseEntryService:
             # Create case record
             case = Case(
                 case_id=case_id,
-                user_id=user_id,
+                user_id=current_user.id,
+                organization_id=getattr(current_user, "organization_id", None),
                 status=CaseStatus.CREATED.value,
                 borrower_name=case_data.borrower_name if case_data else None,
                 entity_type=case_data.entity_type.value if case_data and case_data.entity_type else None,
@@ -80,7 +82,7 @@ class CaseEntryService:
             await self.db.commit()
             await self.db.refresh(case)
 
-            logger.info(f"Created case: {case.case_id} for user: {user_id}")
+            logger.info(f"Created case: {case.case_id} for user: {current_user.id}")
 
             return self._case_to_response(case)
 
@@ -96,7 +98,7 @@ class CaseEntryService:
         self,
         case_id: str,
         files: List[UploadFile],
-        user_id: UUID
+        current_user: User
     ) -> List[DocumentResponse]:
         """
         Upload files to a case. Handles single files and ZIP archives.
@@ -120,7 +122,7 @@ class CaseEntryService:
         """
         try:
             # Get case and verify ownership
-            case = await self._get_case_by_case_id(case_id, user_id)
+            case = await self._get_case_by_case_id(case_id, current_user)
 
             # Validate total upload size
             total_size = 0
@@ -165,7 +167,7 @@ class CaseEntryService:
 
             # Update completeness score if program type is set
             if case.program_type:
-                await self._update_case_completeness(case_id, user_id)
+                await self._update_case_completeness(case_id, current_user.id)
 
             logger.info(f"Uploaded {len(uploaded_documents)} documents to case {case_id}")
 
@@ -214,6 +216,7 @@ class CaseEntryService:
             # Create document record
             document = Document(
                 case_id=case.id,
+                organization_id=getattr(case, "organization_id", None),
                 original_filename=file.filename,
                 storage_key=storage_key,
                 file_size_bytes=len(file_data),
@@ -329,6 +332,11 @@ class CaseEntryService:
                 if classification_result.doc_type in [DocumentType.GST_CERTIFICATE, DocumentType.GST_RETURNS]:
                     await self._extract_and_fetch_gst_data(document, ocr_result.text)
 
+                # Fallback GST detection: if classifier misses GST type but GSTIN exists in text.
+                fallback_gstin = GSTAPIService.extract_gstin_from_text(ocr_result.text)
+                if fallback_gstin:
+                    await self._fetch_and_apply_gst_data(document, fallback_gstin)
+
             else:
                 # Even with short/no OCR text, try filename-based classification
                 logger.warning(f"OCR text too short, trying filename-based classification: {document.id}")
@@ -353,6 +361,11 @@ class CaseEntryService:
                             document,
                             (ocr_result.text if ocr_result and ocr_result.text else "")
                         )
+
+                # Final filename-level GST fallback for unknown/low-text documents.
+                gstin_from_filename = self._extract_gstin_from_filename(document.original_filename)
+                if gstin_from_filename:
+                    await self._fetch_and_apply_gst_data(document, gstin_from_filename)
 
         except Exception as e:
             logger.error(f"Failed to run OCR/classification for document {document.id}: {e}", exc_info=True)
@@ -445,6 +458,7 @@ class CaseEntryService:
                         # Create document record
                         document = Document(
                             case_id=case.id,
+                            organization_id=getattr(case, "organization_id", None),
                             original_filename=filename,
                             storage_key=storage_key,
                             file_size_bytes=len(file_data),
@@ -482,29 +496,54 @@ class CaseEntryService:
         job = DocumentProcessingJob(
             case_id=case_uuid,
             document_id=document_uuid,
+            organization_id=None,
             status="queued",
             attempts=0,
-            max_attempts=2,
+            max_attempts=settings.DOC_QUEUE_MAX_ATTEMPTS,
         )
+        case = await self.db.get(Case, case_uuid)
+        if case:
+            job.organization_id = getattr(case, "organization_id", None)
         self.db.add(job)
         await self.db.flush()
 
-    async def get_case(self, case_id: str, user_id: UUID) -> CaseResponse:
+        if settings.RQ_ASYNC_ENABLED:
+            try:
+                from app.services.rq_queue import enqueue_document_job
+
+                rq_job_id = enqueue_document_job(str(job.id))
+                logger.info("Queued document %s with RQ job %s", document_uuid, rq_job_id)
+            except Exception as enqueue_error:  # noqa: BLE001
+                logger.error(
+                    "Failed to enqueue RQ job for document %s (falling back to DB worker): %s",
+                    document_uuid,
+                    enqueue_error,
+                    exc_info=True,
+                )
+
+    async def get_case(self, case_id: str, current_user: User) -> CaseResponse:
         """Get case details by case ID."""
-        case = await self._get_case_by_case_id(case_id, user_id)
+        case = await self._get_case_by_case_id(case_id, current_user)
         return self._case_to_response(case)
 
-    async def list_cases(self, user_id: UUID) -> List[CaseResponse]:
+    async def list_cases(self, current_user: User) -> List[CaseResponse]:
         """List all cases for a user."""
         try:
-            query = select(Case).where(Case.user_id == user_id).order_by(Case.created_at.desc())
+            query = select(Case)
+            if current_user.role != "super_admin":
+                org_id = getattr(current_user, "organization_id", None)
+                if org_id:
+                    query = query.where(Case.organization_id == org_id)
+                else:
+                    query = query.where(Case.user_id == current_user.id)
+            query = query.order_by(Case.created_at.desc())
             result = await self.db.execute(query)
             cases = result.scalars().all()
 
             return [self._case_to_response(case) for case in cases]
 
         except Exception as e:
-            logger.error(f"Failed to list cases for user {user_id}: {e}")
+            logger.error(f"Failed to list cases for user {current_user.id}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to list cases"
@@ -513,12 +552,12 @@ class CaseEntryService:
     async def update_case(
         self,
         case_id: str,
-        user_id: UUID,
+        current_user: User,
         update_data: CaseUpdate
     ) -> CaseResponse:
         """Update case with manual overrides."""
         try:
-            case = await self._get_case_by_case_id(case_id, user_id)
+            case = await self._get_case_by_case_id(case_id, current_user)
 
             # Update fields
             update_dict = update_data.dict(exclude_unset=True)
@@ -535,7 +574,7 @@ class CaseEntryService:
 
             # Update completeness score if program type is set
             if case.program_type:
-                await self._update_case_completeness(case_id, user_id)
+                await self._update_case_completeness(case_id, current_user.id)
 
             logger.info(f"Updated case: {case_id}")
             return self._case_to_response(case)
@@ -550,14 +589,14 @@ class CaseEntryService:
                 detail="Failed to update case"
             )
 
-    async def delete_case(self, case_id: str, user_id: UUID) -> None:
+    async def delete_case(self, case_id: str, current_user: User) -> None:
         """
         Permanently delete a case and all dependent records.
 
         Also attempts cleanup of stored uploaded files.
         """
         try:
-            case = await self._get_case_by_case_id(case_id, user_id)
+            case = await self._get_case_by_case_id(case_id, current_user)
             storage_keys = [
                 doc.storage_key for doc in case.documents
                 if doc.storage_key
@@ -605,12 +644,16 @@ class CaseEntryService:
 
     # Helper methods
 
-    async def _get_case_by_case_id(self, case_id: str, user_id: UUID) -> Case:
+    async def _get_case_by_case_id(self, case_id: str, current_user: User) -> Case:
         """Get case by case_id and verify ownership."""
-        query = select(Case).where(
-            Case.case_id == case_id,
-            Case.user_id == user_id
-        ).options(selectinload(Case.documents))
+        query = select(Case).where(Case.case_id == case_id)
+        if current_user.role != "super_admin":
+            org_id = getattr(current_user, "organization_id", None)
+            if org_id:
+                query = query.where(Case.organization_id == org_id)
+            else:
+                query = query.where(Case.user_id == current_user.id)
+        query = query.options(selectinload(Case.documents))
 
         result = await self.db.execute(query)
         case = result.scalar_one_or_none()

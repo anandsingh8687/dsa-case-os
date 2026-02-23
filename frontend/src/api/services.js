@@ -72,7 +72,9 @@ export const reclassifyDocument = (docId, newType) =>
 
 // Extraction
 export const runExtraction = (caseId) =>
-  apiClient.post(`/extraction/case/${caseId}/extract`);
+  apiClient.post(`/extraction/case/${caseId}/extract`, null, {
+    timeout: 300000,
+  });
 
 export const getExtractedFields = (caseId) =>
   apiClient.get(`/extraction/case/${caseId}/fields`);
@@ -82,7 +84,9 @@ export const getFeatureVector = (caseId) =>
 
 // Eligibility
 export const runScoring = (caseId) =>
-  apiClient.post(`/eligibility/case/${caseId}/score`);
+  apiClient.post(`/eligibility/case/${caseId}/score`, null, {
+    timeout: 180000,
+  });
 
 export const getEligibilityResults = (caseId) =>
   apiClient.get(`/eligibility/case/${caseId}/results`);
@@ -92,7 +96,9 @@ export const getEligibilityExplanation = (caseId) =>
 
 // Reports
 export const generateReport = (caseId) =>
-  apiClient.post(`/reports/case/${caseId}/generate`);
+  apiClient.post(`/reports/case/${caseId}/generate`, null, {
+    timeout: 180000,
+  });
 
 export const getReportPdf = (caseId) =>
   apiClient.get(`/reports/case/${caseId}/report/pdf`, {

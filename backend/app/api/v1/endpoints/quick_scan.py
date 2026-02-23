@@ -288,15 +288,17 @@ async def run_quick_scan(request: QuickScanRequest, current_user: CurrentUser):
         },
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+    user_org_id = getattr(current_user, "organization_id", None)
 
     async with get_db_session() as db:
         scan_id = await db.fetchval(
             """
-            INSERT INTO quick_scans (user_id, loan_type, pincode, scan_data)
-            VALUES ($1, $2, $3, $4::jsonb)
+            INSERT INTO quick_scans (user_id, organization_id, loan_type, pincode, scan_data)
+            VALUES ($1, $2, $3, $4, $5::jsonb)
             RETURNING id::text
             """,
             current_user.id,
+            user_org_id,
             request.loan_type,
             request.pincode,
             json.dumps(scan_record),
@@ -324,15 +326,31 @@ async def get_quick_scan_knowledge_base_stats(current_user: CurrentUser):
 async def get_quick_scan(scan_id: UUID, current_user: CurrentUser):
     """Fetch a previously generated quick scan owned by current user."""
     async with get_db_session() as db:
-        row = await db.fetchrow(
-            """
-            SELECT scan_data
-            FROM quick_scans
-            WHERE id = $1 AND user_id = $2
-            """,
-            scan_id,
-            current_user.id,
-        )
+        if current_user.role == "super_admin":
+            row = await db.fetchrow(
+                "SELECT scan_data FROM quick_scans WHERE id = $1",
+                scan_id,
+            )
+        elif getattr(current_user, "organization_id", None):
+            row = await db.fetchrow(
+                """
+                SELECT scan_data
+                FROM quick_scans
+                WHERE id = $1 AND organization_id = $2
+                """,
+                scan_id,
+                getattr(current_user, "organization_id", None),
+            )
+        else:
+            row = await db.fetchrow(
+                """
+                SELECT scan_data
+                FROM quick_scans
+                WHERE id = $1 AND user_id = $2
+                """,
+                scan_id,
+                current_user.id,
+            )
 
     if not row:
         raise HTTPException(status_code=404, detail="Quick scan not found")
@@ -347,15 +365,28 @@ async def get_quick_scan(scan_id: UUID, current_user: CurrentUser):
 async def get_quick_scan_card(scan_id: UUID, current_user: CurrentUser):
     """Generate a simple shareable PNG result card for a quick scan."""
     async with get_db_session() as db:
-        row = await db.fetchrow(
-            """
-            SELECT scan_data
-            FROM quick_scans
-            WHERE id = $1 AND user_id = $2
-            """,
-            scan_id,
-            current_user.id,
-        )
+        if current_user.role == "super_admin":
+            row = await db.fetchrow("SELECT scan_data FROM quick_scans WHERE id = $1", scan_id)
+        elif getattr(current_user, "organization_id", None):
+            row = await db.fetchrow(
+                """
+                SELECT scan_data
+                FROM quick_scans
+                WHERE id = $1 AND organization_id = $2
+                """,
+                scan_id,
+                getattr(current_user, "organization_id", None),
+            )
+        else:
+            row = await db.fetchrow(
+                """
+                SELECT scan_data
+                FROM quick_scans
+                WHERE id = $1 AND user_id = $2
+                """,
+                scan_id,
+                current_user.id,
+            )
 
     if not row:
         raise HTTPException(status_code=404, detail="Quick scan not found")

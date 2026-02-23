@@ -12,6 +12,7 @@ import {
   Clock,
   Target
 } from 'lucide-react';
+import crediloLogo from '../assets/credilo-logo.svg';
 
 const LOGIN_URL = '/login';
 
@@ -106,9 +107,11 @@ const LandingPage = () => {
         {/* Navigation */}
         <nav className="relative z-10 container mx-auto px-6 py-6 flex justify-between items-center">
           <div className="flex items-center space-x-2">
-            <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
-              <FileText className="w-6 h-6 text-white" />
-            </div>
+            <img
+              src={crediloLogo}
+              alt="Credilo logo"
+              className="w-10 h-10 rounded-lg object-cover border border-white/20"
+            />
             <span className="text-2xl font-bold text-white">Credilo</span>
           </div>
           <div className="flex space-x-4">

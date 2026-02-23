@@ -222,6 +222,7 @@ const NewCase = () => {
       setUploadProgress(100);
       setUploadPhase('server_processing');
       setFileProgress((prev) => prev.map((entry) => ({ ...entry, progress: 100 })));
+      void checkForGSTData(variables.caseId, { maxAttempts: 30, pollDelayMs: 1500 });
 
       if (workflowMode === 'docs-first') {
         setStep(2);
@@ -246,12 +247,14 @@ const NewCase = () => {
   });
 
   // Check if GST data is available for this case
-  const checkForGSTData = async (targetCaseId = caseId) => {
+  const checkForGSTData = async (targetCaseId = caseId, options = {}) => {
     if (!targetCaseId) return;
+    const maxAttempts = Number.isFinite(options.maxAttempts) ? options.maxAttempts : 20;
+    const pollDelayMs = Number.isFinite(options.pollDelayMs) ? options.pollDelayMs : 1500;
 
     setIsCheckingGST(true);
     try {
-      for (let attempt = 1; attempt <= 5; attempt += 1) {
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         try {
           const response = await apiClient.get(`/cases/${targetCaseId}/gst-data`);
           if (response.data && response.data.gst_data) {
@@ -263,8 +266,8 @@ const NewCase = () => {
           // continue polling for GST extraction
         }
 
-        if (attempt < 5) {
-          await wait(1200);
+        if (attempt < maxAttempts) {
+          await wait(pollDelayMs);
         }
       }
       console.log('No GST data available yet');
@@ -346,8 +349,12 @@ const NewCase = () => {
   // Handle docs-first workflow - create minimal case to get case ID
   const handleDocsFirstStart = async (seedData = {}) => {
     try {
+      const incomingBorrowerName = String(seedData.borrower_name || '').trim();
+      const shouldUseBorrowerName =
+        incomingBorrowerName.length > 0 && incomingBorrowerName.toLowerCase() !== 'quick scan prospect';
+
       const minimalData = {
-        borrower_name: seedData.borrower_name || undefined,
+        borrower_name: shouldUseBorrowerName ? incomingBorrowerName : undefined,
         entity_type: seedData.entity_type || 'proprietorship',
         program_type: seedData.program_type || 'banking',
         pincode: seedData.pincode || undefined,
@@ -385,31 +392,9 @@ const NewCase = () => {
       return;
     }
 
-    setWorkflowMode('form-first');
-    setStep(1);
-    if (
-      inboundPrefill.borrower_name &&
-      String(inboundPrefill.borrower_name).trim().toLowerCase() !== 'quick scan prospect'
-    ) {
-      setValue('borrower_name', inboundPrefill.borrower_name);
-    }
-    if (inboundPrefill.entity_type) {
-      setValue('entity_type', inboundPrefill.entity_type);
-    }
-    if (inboundPrefill.program_type) {
-      setValue('program_type', inboundPrefill.program_type);
-    }
-    if (inboundPrefill.industry_type) {
-      setValue('industry', inboundPrefill.industry_type);
-    }
-    if (inboundPrefill.pincode) {
-      setValue('pincode', inboundPrefill.pincode);
-    }
-    if (inboundPrefill.loan_amount_requested !== null && inboundPrefill.loan_amount_requested !== undefined) {
-      setValue('loan_amount_requested', inboundPrefill.loan_amount_requested);
-    }
+    void handleDocsFirstStart(inboundPrefill);
     navigate('/cases/new', { replace: true, state: null });
-  }, [inboundPrefill, step, workflowMode, caseId, navigate, setValue]);
+  }, [inboundPrefill, step, workflowMode, caseId, navigate]);
 
   useEffect(() => {
     if (!gstData) return;
@@ -453,37 +438,30 @@ const NewCase = () => {
             <Sparkles className="w-12 h-12 mx-auto mb-4 text-primary" />
             <h2 className="text-2xl font-semibold mb-2">Choose Your Workflow</h2>
             <p className="text-gray-600 mb-8">
-              Select how you'd like to create this case
+              Start with quick scan or upload documents directly.
             </p>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl mx-auto">
-              {/* Option 1: Form First (Traditional) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-3xl mx-auto">
               <button
-                onClick={() => {
-                  setWorkflowMode('form-first');
-                  setStep(1);
-                }}
-                className="group p-6 border-2 border-gray-200 rounded-xl hover:border-primary hover:bg-primary/5 transition-all text-left"
+                onClick={() => navigate('/quick-scan', { state: { fromNewCase: true } })}
+                className="group p-6 border border-blue-200 bg-blue-50 rounded-xl hover:bg-blue-100 transition-colors text-left"
               >
                 <div className="flex items-center justify-between mb-3">
-                  <FileText className="w-8 h-8 text-primary" />
-                  <span className="text-xs font-semibold text-gray-500 bg-gray-100 px-2 py-1 rounded">
-                    Traditional
-                  </span>
+                  <Search className="w-8 h-8 text-primary" />
                 </div>
-                <h3 className="text-lg font-semibold mb-2 group-hover:text-primary">
-                  Fill Form First
+                <h3 className="text-lg font-semibold mb-2 text-primary">
+                  Run Quick Scan
                 </h3>
                 <p className="text-sm text-gray-600 mb-4">
-                  Enter borrower details manually, then upload documents for verification
+                  Check eligibility first, then convert this into full case with prefill.
                 </p>
-                <div className="text-xs text-gray-500">
-                  ✓ Best for returning clients<br />
-                  ✓ When you know all details upfront
+                <div className="text-xs text-blue-700 font-medium">
+                  ✓ Instant lender snapshot<br />
+                  ✓ No initial document upload required<br />
+                  ✓ Seamless continuation to full case
                 </div>
               </button>
 
-              {/* Option 2: Documents First (Smart) */}
               <button
                 onClick={() => {
                   setWorkflowMode('docs-first');
@@ -501,33 +479,16 @@ const NewCase = () => {
                   <Upload className="w-8 h-8 text-primary" />
                 </div>
                 <h3 className="text-lg font-semibold mb-2 text-primary">
-                  Upload Documents First
+                  Upload Documents
                 </h3>
                 <p className="text-sm text-gray-600 mb-4">
-                  Upload GST/Bank statements first, and we'll auto-fill the form for you
+                  Upload GST and bank docs first. We detect GSTIN and auto-fill borrower details.
                 </p>
                 <div className="text-xs text-primary font-medium">
-                  ✓ Auto-extracts borrower name<br />
+                  ✓ Auto-fills borrower trade/legal name<br />
                   ✓ Auto-fills entity type & pincode<br />
                   ✓ Calculates business vintage<br />
                   ✓ Saves time & reduces errors
-                </div>
-              </button>
-            </div>
-
-            <div className="mt-6 max-w-3xl mx-auto">
-              <button
-                onClick={() => navigate('/quick-scan', { state: { fromNewCase: true } })}
-                className="w-full p-4 border border-blue-200 bg-blue-50 rounded-xl hover:bg-blue-100 transition-colors text-left"
-              >
-                <div className="flex items-center gap-3">
-                  <Search className="w-5 h-5 text-primary" />
-                  <div>
-                    <div className="font-semibold text-primary">Run Quick Scan First (No Documents)</div>
-                    <div className="text-xs text-blue-700">
-                      Check instant eligibility, then continue into this New Case flow with pre-filled values.
-                    </div>
-                  </div>
                 </div>
               </button>
             </div>
@@ -550,8 +511,8 @@ const NewCase = () => {
         <div className="mb-8">
           <div className="flex items-center justify-between">
             {[
-              { num: 1, label: workflowMode === 'docs-first' ? 'Upload Documents' : 'Basic Info' },
-              { num: 2, label: workflowMode === 'docs-first' ? 'Review & Complete' : 'Upload Documents' },
+              { num: 1, label: 'Upload Documents' },
+              { num: 2, label: 'Review & Complete' },
               { num: 3, label: 'Complete' },
             ].map((s) => (
               <div
