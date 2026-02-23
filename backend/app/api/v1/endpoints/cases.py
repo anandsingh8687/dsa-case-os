@@ -36,7 +36,7 @@ async def _read_document_bytes(service: CaseEntryService, storage_key: str) -> O
         return None
 
     file_content = await service.storage.get_file(storage_key)
-    if file_content:
+    if file_content is not None:
         return file_content
 
     file_path = service.storage.get_file_path(storage_key)
@@ -68,7 +68,7 @@ async def create_case(
         CaseResponse with generated case_id and initial state
     """
     service = CaseEntryService(db)
-    return await service.create_case(current_user.id, case_data)
+    return await service.create_case(current_user, case_data)
 
 
 @router.post("/{case_id}/upload", response_model=List[DocumentResponse])
@@ -105,7 +105,7 @@ async def upload_documents(
         400: Invalid file format
     """
     service = CaseEntryService(db)
-    return await service.upload_files(case_id, files, current_user.id)
+    return await service.upload_files(case_id, files, current_user)
 
 
 @router.get("/", response_model=List[CaseResponse])
@@ -124,7 +124,7 @@ async def list_cases(
         List of cases ordered by creation date (newest first)
     """
     service = CaseEntryService(db)
-    return await service.list_cases(current_user.id)
+    return await service.list_cases(current_user)
 
 
 @router.get("/{case_id}", response_model=CaseResponse)
@@ -148,7 +148,7 @@ async def get_case(
         404: Case not found or doesn't belong to user
     """
     service = CaseEntryService(db)
-    return await service.get_case(case_id, current_user.id)
+    return await service.get_case(case_id, current_user)
 
 
 @router.patch("/{case_id}", response_model=CaseResponse)
@@ -179,7 +179,7 @@ async def update_case(
         404: Case not found
     """
     service = CaseEntryService(db)
-    return await service.update_case(case_id, current_user.id, case_data)
+    return await service.update_case(case_id, current_user, case_data)
 
 
 @router.delete("/{case_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -203,7 +203,7 @@ async def delete_case(
         404: Case not found
     """
     service = CaseEntryService(db)
-    await service.delete_case(case_id, current_user.id)
+    await service.delete_case(case_id, current_user)
     return None
 
 
@@ -225,7 +225,7 @@ async def get_case_documents(
         List of DocumentResponse with document details
     """
     service = CaseEntryService(db)
-    case = await service._get_case_by_case_id(case_id, current_user.id)
+    case = await service._get_case_by_case_id(case_id, current_user)
     return [service._document_to_response(doc) for doc in case.documents]
 
 
@@ -241,7 +241,7 @@ async def download_case_documents_archive(
     Useful for one-click lender sharing from the report/email workflow.
     """
     service = CaseEntryService(db)
-    case = await service._get_case_by_case_id(case_id, current_user.id)
+    case = await service._get_case_by_case_id(case_id, current_user)
 
     if not case.documents:
         raise HTTPException(
@@ -255,25 +255,43 @@ async def download_case_documents_archive(
 
     with zipfile.ZipFile(archive_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
         for doc in case.documents:
-            if not doc.storage_key:
+            original_name = doc.original_filename or (
+                Path(doc.storage_key).name if doc.storage_key else f"document_{doc.id}"
+            )
+            file_content = await _read_document_bytes(service, doc.storage_key) if doc.storage_key else None
+            if file_content is not None:
+                duplicate_idx = filename_counts.get(original_name, 0)
+                filename_counts[original_name] = duplicate_idx + 1
+
+                if duplicate_idx > 0:
+                    stem = Path(original_name).stem
+                    suffix = Path(original_name).suffix
+                    archive_name = f"{stem}_{duplicate_idx}{suffix}"
+                else:
+                    archive_name = original_name
+
+                archive.writestr(archive_name, file_content)
+                added_files += 1
                 continue
-            file_content = await _read_document_bytes(service, doc.storage_key)
-            if not file_content:
-                continue
 
-            original_name = doc.original_filename or Path(doc.storage_key).name
-            duplicate_idx = filename_counts.get(original_name, 0)
-            filename_counts[original_name] = duplicate_idx + 1
-
-            if duplicate_idx > 0:
-                stem = Path(original_name).stem
-                suffix = Path(original_name).suffix
-                archive_name = f"{stem}_{duplicate_idx}{suffix}"
-            else:
-                archive_name = original_name
-
-            archive.writestr(archive_name, file_content)
-            added_files += 1
+            # File missing in storage: include OCR fallback text so ZIP stays usable.
+            ocr_text = (doc.ocr_text or "").strip()
+            if ocr_text:
+                stem = Path(original_name).stem or f"document_{doc.id}"
+                fallback_name = f"{stem}_ocr.txt"
+                duplicate_idx = filename_counts.get(fallback_name, 0)
+                filename_counts[fallback_name] = duplicate_idx + 1
+                if duplicate_idx > 0:
+                    fallback_name = f"{Path(fallback_name).stem}_{duplicate_idx}.txt"
+                archive.writestr(
+                    fallback_name,
+                    "Original binary file is currently unavailable in storage.\n\n"
+                    f"Source filename: {original_name}\n"
+                    f"Document ID: {doc.id}\n\n"
+                    "OCR TEXT:\n"
+                    f"{ocr_text}",
+                )
+                added_files += 1
 
         if added_files == 0:
             archive.writestr(
@@ -301,7 +319,7 @@ async def preview_case_document(
 ):
     """Preview/download one case document in-browser."""
     service = CaseEntryService(db)
-    case = await service._get_case_by_case_id(case_id, current_user.id)
+    case = await service._get_case_by_case_id(case_id, current_user)
 
     target_doc = next((doc for doc in case.documents if str(doc.id) == document_id), None)
     if not target_doc:
@@ -310,14 +328,34 @@ async def preview_case_document(
             detail="Document not found for this case",
         )
 
+    filename = target_doc.original_filename or Path(target_doc.storage_key).name or "document"
     file_content = await _read_document_bytes(service, target_doc.storage_key)
-    if not file_content:
+    if file_content is None:
+        ocr_fallback = (target_doc.ocr_text or "").strip()
+        if ocr_fallback:
+            fallback_name = f"{Path(filename).stem or 'document'}_ocr.txt"
+            return StreamingResponse(
+                iter(
+                    [
+                        (
+                            "Original binary file is currently unavailable in storage.\n\n"
+                            f"Source filename: {filename}\n"
+                            f"Document ID: {target_doc.id}\n\n"
+                            "OCR TEXT:\n"
+                            f"{ocr_fallback}"
+                        ).encode("utf-8")
+                    ]
+                ),
+                media_type="text/plain; charset=utf-8",
+                headers={
+                    "Content-Disposition": f'inline; filename="{fallback_name}"'
+                },
+            )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Unable to read this document file. Please re-upload and try again.",
         )
 
-    filename = target_doc.original_filename or Path(target_doc.storage_key).name or "document"
     media_type = target_doc.mime_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
     return StreamingResponse(
@@ -413,7 +451,7 @@ async def get_case_status(
     Used by frontend polling after document upload to avoid fixed delays.
     """
     service = CaseEntryService(db)
-    case = await service._get_case_by_case_id(case_id, current_user.id)
+    case = await service._get_case_by_case_id(case_id, current_user)
 
     job_rows = await db.execute(
         select(DocumentProcessingJob.status, func.count(DocumentProcessingJob.id))
@@ -470,7 +508,7 @@ async def get_gst_data(
         404: Case not found or no GST data available
     """
     service = CaseEntryService(db)
-    case = await service._get_case_by_case_id(case_id, current_user.id)
+    case = await service._get_case_by_case_id(case_id, current_user)
 
     if not case.gst_data:
         raise HTTPException(
