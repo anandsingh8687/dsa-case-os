@@ -2,6 +2,7 @@
 import logging
 import time
 import asyncio
+from pathlib import Path
 from typing import List
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
@@ -23,11 +24,35 @@ router = APIRouter(prefix="/extraction", tags=["extraction"])
 
 MAX_BANK_STATEMENTS_PER_RUN = max(0, int(settings.EXTRACTION_MAX_BANK_STATEMENTS_PER_RUN))
 BANK_ANALYSIS_TIMEOUT_SECONDS = max(10.0, float(settings.EXTRACTION_BANK_ANALYSIS_TIMEOUT_SECONDS))
+BANK_FILENAME_HINTS = (
+    "bank",
+    "statement",
+    "stmt",
+    "account",
+    "passbook",
+    "transaction",
+)
+MAX_BANK_STATEMENT_FILE_BYTES = 8 * 1024 * 1024  # 8 MB safety guard for extraction-time parser
 
 
 def _as_float(value):
     if value is None or value == "":
         return None
+
+
+def _is_likely_bank_statement_document(document: Document) -> bool:
+    """Filter false-positive bank statement classifications to avoid heavy parser crashes."""
+    filename = (document.original_filename or "").lower()
+    if any(hint in filename for hint in BANK_FILENAME_HINTS):
+        return True
+
+    # Keep tiny files with high confidence even if filename is generic.
+    confidence = float(document.classification_confidence or 0.0)
+    file_size = int(document.file_size_bytes or 0)
+    if confidence >= 0.9 and 0 < file_size <= 2 * 1024 * 1024:
+        return True
+
+    return False
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -132,7 +157,15 @@ async def trigger_extraction(
 
                 # Collect bank statement documents for separate analysis
                 if doc_type == DocumentType.BANK_STATEMENT:
-                    bank_statement_docs.append(doc)
+                    if _is_likely_bank_statement_document(doc):
+                        bank_statement_docs.append(doc)
+                    else:
+                        extraction_summary.append({
+                            "document_id": str(doc.id),
+                            "doc_type": doc.doc_type,
+                            "fields_extracted": 0,
+                            "note": "Skipped bank analysis for non-statement-like document",
+                        })
                     continue
 
                 if not doc.ocr_text:
@@ -186,8 +219,10 @@ async def trigger_extraction(
             try:
                 bank_statement_docs = sorted(
                     bank_statement_docs,
-                    key=lambda item: item.created_at or 0,
-                    reverse=True
+                    key=lambda item: (
+                        int(item.file_size_bytes or 0),
+                        item.created_at or 0,
+                    ),
                 )
 
                 # Get file paths for bank statements
@@ -195,7 +230,12 @@ async def trigger_extraction(
                 for doc in bank_statement_docs:
                     if doc.storage_key:
                         file_path = storage.get_file_path(doc.storage_key)
-                        if file_path and file_path.exists():
+                        if (
+                            file_path
+                            and file_path.exists()
+                            and Path(file_path).suffix.lower() == ".pdf"
+                            and int(doc.file_size_bytes or 0) <= MAX_BANK_STATEMENT_FILE_BYTES
+                        ):
                             bank_pdf_paths.append(str(file_path))
 
                 max_docs = MAX_BANK_STATEMENTS_PER_RUN or len(bank_pdf_paths)

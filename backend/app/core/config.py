@@ -115,7 +115,7 @@ class Settings(BaseSettings):
         os.getenv("EXTRACTION_BANK_ANALYSIS_TIMEOUT_SECONDS", "180")
     )
     EXTRACTION_MAX_BANK_STATEMENTS_PER_RUN: int = int(
-        os.getenv("EXTRACTION_MAX_BANK_STATEMENTS_PER_RUN", "12")
+        os.getenv("EXTRACTION_MAX_BANK_STATEMENTS_PER_RUN", "3")
     )
 
     # Case ID Format
