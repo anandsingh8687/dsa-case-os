@@ -23,7 +23,12 @@ from app.schemas.shared import (
 from app.core.enums import HardFilterStatus, ApprovalProbability, DocumentType, ProgramType
 from app.db.database import get_db_session
 from app.core.config import settings
-from app.services.rag_service import search_relevant_lender_chunks
+
+try:
+    from app.services.rag_service import search_relevant_lender_chunks
+except Exception:  # noqa: BLE001
+    async def search_relevant_lender_chunks(**kwargs):  # type: ignore[override]
+        return []
 
 logger = logging.getLogger(__name__)
 LLM_STRATEGY_TIMEOUT_SECONDS = 6.0
