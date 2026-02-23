@@ -274,7 +274,7 @@ class FeatureAssembler:
         # Float fields
         float_fields = [
             "annual_turnover", "avg_monthly_balance", "monthly_credit_avg",
-            "emi_outflow_monthly", "cash_deposit_ratio", "itr_total_income",
+            "monthly_turnover", "emi_outflow_monthly", "cash_deposit_ratio", "itr_total_income",
             "business_vintage_years"
         ]
         if field_name in float_fields:
@@ -351,12 +351,15 @@ class FeatureAssembler:
             # Update existing record
             for key, value in feature_dict.items():
                 setattr(existing, key, value)
+            if not existing.organization_id:
+                existing.organization_id = case.organization_id
             borrower_feature = existing
             logger.info(f"Updated feature vector for case {case_id}")
         else:
             # Create new record
             borrower_feature = BorrowerFeature(
                 case_id=case.id,
+                organization_id=case.organization_id,
                 **feature_dict
             )
             db.add(borrower_feature)
@@ -399,6 +402,7 @@ class FeatureAssembler:
             extracted_field = ExtractedField(
                 case_id=case.id,
                 document_id=document_id,
+                organization_id=case.organization_id,
                 field_name=field_item.field_name,
                 field_value=field_item.field_value,
                 confidence=field_item.confidence,
@@ -497,6 +501,7 @@ class FeatureAssembler:
             "annual_turnover": feature.annual_turnover,
             "avg_monthly_balance": feature.avg_monthly_balance,
             "monthly_credit_avg": feature.monthly_credit_avg,
+            "monthly_turnover": feature.monthly_turnover,
             "emi_outflow_monthly": feature.emi_outflow_monthly,
             "bounce_count_12m": feature.bounce_count_12m,
             "cash_deposit_ratio": feature.cash_deposit_ratio,

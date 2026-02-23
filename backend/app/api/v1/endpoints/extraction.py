@@ -15,18 +15,40 @@ from app.services.stages.stage2_extraction import get_extractor
 from app.services.stages.stage2_features import get_assembler
 from app.services.stages.stage2_bank_analyzer import get_analyzer
 from app.services.file_storage import get_storage_backend
+from app.core.deps import CurrentUser
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/extraction", tags=["extraction"])
 
-MAX_BANK_STATEMENTS_PER_RUN = 1
-BANK_ANALYSIS_TIMEOUT_SECONDS = 5.0
+MAX_BANK_STATEMENTS_PER_RUN = max(0, int(settings.EXTRACTION_MAX_BANK_STATEMENTS_PER_RUN))
+BANK_ANALYSIS_TIMEOUT_SECONDS = max(10.0, float(settings.EXTRACTION_BANK_ANALYSIS_TIMEOUT_SECONDS))
+
+
+def _as_float(value):
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _scoped_case_query(case_id: str, current_user):
+    query = select(Case).where(Case.case_id == case_id)
+    if current_user.role != "super_admin":
+        if current_user.organization_id:
+            query = query.where(Case.organization_id == current_user.organization_id)
+        else:
+            query = query.where(Case.user_id == current_user.id)
+    return query
 
 
 @router.post("/case/{case_id}/extract")
 async def trigger_extraction(
     case_id: str,
-    db: AsyncSession = Depends(get_db)
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Trigger extraction pipeline for a case.
@@ -51,7 +73,7 @@ async def trigger_extraction(
 
     try:
         # Get the case
-        query = select(Case).where(Case.case_id == case_id)
+        query = _scoped_case_query(case_id, current_user)
         result = await db.execute(query)
         case = result.scalar_one_or_none()
 
@@ -175,12 +197,16 @@ async def trigger_extraction(
                         if file_path and file_path.exists():
                             bank_pdf_paths.append(str(file_path))
 
-                analyzed_pdf_paths = bank_pdf_paths[:MAX_BANK_STATEMENTS_PER_RUN]
+                max_docs = MAX_BANK_STATEMENTS_PER_RUN or len(bank_pdf_paths)
+                analyzed_pdf_paths = bank_pdf_paths[:max_docs]
 
                 if bank_pdf_paths:
                     logger.info(
-                        f"Analyzing {len(bank_pdf_paths)} bank statement(s) "
-                        f"for case {case_id}"
+                        "Analyzing %s/%s bank statement(s) for case %s with timeout=%ss",
+                        len(analyzed_pdf_paths),
+                        len(bank_pdf_paths),
+                        case_id,
+                        BANK_ANALYSIS_TIMEOUT_SECONDS,
                     )
 
                     # Run bank analysis
@@ -189,31 +215,58 @@ async def trigger_extraction(
                         timeout=BANK_ANALYSIS_TIMEOUT_SECONDS
                     )
 
-                    # Convert bank analysis results to extracted fields
+                    # Convert bank analysis results to extracted fields.
+                    # Prefer explicit analyzer outputs and fallback to Credilo summary
+                    # so profile metrics are available even when raw transaction shapes vary.
                     bank_fields = []
+                    credilo_summary = bank_result.credilo_summary or {}
+                    statement_months = max(int(bank_result.statement_period_months or 0), 1)
 
-                    if bank_result.avg_monthly_balance is not None:
+                    avg_monthly_balance = (
+                        bank_result.avg_monthly_balance
+                        if bank_result.avg_monthly_balance is not None
+                        else _as_float(credilo_summary.get("custom_average_balance"))
+                        or _as_float(credilo_summary.get("average_balance"))
+                    )
+
+                    monthly_credit_avg = bank_result.monthly_credit_avg
+                    if monthly_credit_avg is None:
+                        total_credit_amount = _as_float(credilo_summary.get("credit_transactions_amount"))
+                        if total_credit_amount and statement_months > 0:
+                            monthly_credit_avg = round(total_credit_amount / statement_months, 2)
+
+                    emi_outflow_monthly = bank_result.emi_outflow_monthly
+                    if emi_outflow_monthly is None:
+                        total_emi_amount = _as_float(credilo_summary.get("total_emi_amount"))
+                        if total_emi_amount and statement_months > 0:
+                            emi_outflow_monthly = round(total_emi_amount / statement_months, 2)
+
+                    bounce_count_12m = bank_result.bounce_count_12m
+                    if not bounce_count_12m:
+                        bounce_count_12m = int(_as_float(credilo_summary.get("no_of_emi_bounce")) or 0)
+
+                    if avg_monthly_balance is not None:
                         bank_fields.append(ExtractedFieldItem(
                             field_name="avg_monthly_balance",
-                            field_value=str(bank_result.avg_monthly_balance),
+                            field_value=str(avg_monthly_balance),
                             confidence=bank_result.confidence,
                             source="bank_analysis"
                         ))
 
-                    if bank_result.monthly_credit_avg is not None:
+                    if monthly_credit_avg is not None:
                         bank_fields.append(ExtractedFieldItem(
                             field_name="monthly_credit_avg",
-                            field_value=str(bank_result.monthly_credit_avg),
+                            field_value=str(monthly_credit_avg),
                             confidence=bank_result.confidence,
                             source="bank_analysis"
                         ))
                         bank_fields.append(ExtractedFieldItem(
                             field_name="monthly_turnover",
-                            field_value=str(bank_result.monthly_credit_avg),
+                            field_value=str(monthly_credit_avg),
                             confidence=bank_result.confidence,
                             source="bank_analysis"
                         ))
-                        annual_turnover_lakhs = round((bank_result.monthly_credit_avg * 12) / 100000, 2)
+                        annual_turnover_lakhs = round((monthly_credit_avg * 12) / 100000, 2)
                         bank_fields.append(ExtractedFieldItem(
                             field_name="annual_turnover",
                             field_value=str(annual_turnover_lakhs),
@@ -221,18 +274,18 @@ async def trigger_extraction(
                             source="bank_analysis"
                         ))
 
-                    if bank_result.emi_outflow_monthly is not None:
+                    if emi_outflow_monthly is not None:
                         bank_fields.append(ExtractedFieldItem(
                             field_name="emi_outflow_monthly",
-                            field_value=str(bank_result.emi_outflow_monthly),
+                            field_value=str(emi_outflow_monthly),
                             confidence=bank_result.confidence,
                             source="bank_analysis"
                         ))
 
-                    if bank_result.bounce_count_12m is not None:
+                    if bounce_count_12m is not None:
                         bank_fields.append(ExtractedFieldItem(
                             field_name="bounce_count_12m",
-                            field_value=str(bank_result.bounce_count_12m),
+                            field_value=str(bounce_count_12m),
                             confidence=bank_result.confidence,
                             source="bank_analysis"
                         ))
@@ -244,6 +297,28 @@ async def trigger_extraction(
                             confidence=bank_result.confidence,
                             source="bank_analysis"
                         ))
+
+                    analyzer_detail_fields = {
+                        "bank_detected": bank_result.bank_detected,
+                        "transaction_count": bank_result.transaction_count,
+                        "statement_period_months": bank_result.statement_period_months,
+                        "monthly_debit_avg": bank_result.monthly_debit_avg,
+                        "peak_balance": bank_result.peak_balance,
+                        "min_balance": bank_result.min_balance,
+                        "total_credits_12m": bank_result.total_credits_12m,
+                        "total_debits_12m": bank_result.total_debits_12m,
+                    }
+                    for field_name, value in analyzer_detail_fields.items():
+                        if value is None:
+                            continue
+                        bank_fields.append(
+                            ExtractedFieldItem(
+                                field_name=field_name,
+                                field_value=str(value),
+                                confidence=bank_result.confidence,
+                                source="bank_analysis",
+                            )
+                        )
 
                     credilo_summary_fields = [
                         ("credilo_total_input_files", "total_input_files"),
@@ -270,7 +345,7 @@ async def trigger_extraction(
                     ]
 
                     for field_name, summary_key in credilo_summary_fields:
-                        value = bank_result.credilo_summary.get(summary_key)
+                        value = credilo_summary.get(summary_key)
                         if value is None:
                             continue
                         bank_fields.append(
@@ -406,7 +481,8 @@ async def trigger_extraction(
 @router.get("/case/{case_id}/fields", response_model=List[ExtractedFieldItem])
 async def get_extracted_fields(
     case_id: str,
-    db: AsyncSession = Depends(get_db)
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get all extracted field items for a case.
@@ -419,10 +495,17 @@ async def get_extracted_fields(
         List of extracted field items with confidence scores
     """
     try:
+        case_result = await db.execute(_scoped_case_query(case_id, current_user))
+        case = case_result.scalar_one_or_none()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
         assembler = get_assembler()
         fields = await assembler.get_extracted_fields(db=db, case_id=case_id)
         return fields
 
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -436,7 +519,8 @@ async def get_extracted_fields(
 @router.get("/case/{case_id}/features", response_model=BorrowerFeatureVector)
 async def get_feature_vector(
     case_id: str,
-    db: AsyncSession = Depends(get_db)
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get the assembled borrower feature vector for a case.
@@ -449,6 +533,11 @@ async def get_feature_vector(
         BorrowerFeatureVector with all assembled features
     """
     try:
+        case_result = await db.execute(_scoped_case_query(case_id, current_user))
+        case = case_result.scalar_one_or_none()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
         assembler = get_assembler()
         feature_vector = await assembler.get_feature_vector(db=db, case_id=case_id)
 

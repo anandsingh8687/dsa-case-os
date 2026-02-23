@@ -23,6 +23,7 @@ from app.schemas.shared import (
 from app.core.enums import HardFilterStatus, ApprovalProbability, DocumentType, ProgramType
 from app.db.database import get_db_session
 from app.core.config import settings
+from app.services.rag_service import search_relevant_lender_chunks
 
 logger = logging.getLogger(__name__)
 LLM_STRATEGY_TIMEOUT_SECONDS = 6.0
@@ -360,7 +361,8 @@ def suggest_improvements(borrower: BorrowerFeatureVector) -> str:
 
 async def generate_submission_strategy(
     borrower: BorrowerFeatureVector,
-    lender_matches: List[EligibilityResult]
+    lender_matches: List[EligibilityResult],
+    organization_id: Optional[UUID] = None,
 ) -> str:
     """Generate LLM-based narrative submission strategy.
 
@@ -415,6 +417,31 @@ async def generate_submission_strategy(
         )
         lender_context.append(lender_info)
 
+    rag_context_blocks: list[str] = []
+    if organization_id:
+        try:
+            prompt_query = (
+                f"{top_lender.lender_name} {top_lender.product_name} policy "
+                f"CIBIL {borrower.cibil_score or 'unknown'} "
+                f"entity {borrower.entity_type or 'unknown'}"
+            )
+            rag_chunks = await search_relevant_lender_chunks(
+                organization_id=organization_id,
+                query=prompt_query,
+                top_k=settings.RAG_TOP_K,
+            )
+            for idx, chunk in enumerate(rag_chunks[: settings.RAG_TOP_K], start=1):
+                snippet = (chunk.get("chunk_text") or "").strip()
+                if not snippet:
+                    continue
+                rag_context_blocks.append(
+                    f"{idx}. {chunk.get('lender_name') or 'Unknown'} | "
+                    f"{chunk.get('product_type') or 'Unknown'} | "
+                    f"{chunk.get('section_title') or 'Section'}\n{snippet[:1000]}"
+                )
+        except Exception as rag_error:  # noqa: BLE001
+            logger.warning("Report RAG retrieval failed: %s", rag_error)
+
     # If LLM API is not configured, use fallback format
     if not settings.LLM_API_KEY:
         logger.warning("LLM_API_KEY not configured, using fallback bullet format")
@@ -448,6 +475,9 @@ Our eligibility analysis has identified {len(passed)} compatible lenders, ranked
 
 **SPECIAL CONSIDERATIONS FOR PRIMARY TARGET:**
 {special_notes or 'No special requirements noted'}
+
+**POLICY REFERENCE CONTEXT (from lender policy documents):**
+{chr(10).join(rag_context_blocks) if rag_context_blocks else 'No additional policy snippets available for this org.'}
 
 **YOUR TASK - Write a Strategic Narrative:**
 Craft a 3-4 paragraph strategic story that:
@@ -519,14 +549,33 @@ async def _generate_fallback_strategy(
     """
     top_lender = passed[0]
 
+    score_text = (
+        f"{top_lender.eligibility_score:.0f}/100"
+        if top_lender.eligibility_score is not None
+        else "N/A"
+    )
+    probability_text = (
+        top_lender.approval_probability.value.upper()
+        if top_lender.approval_probability
+        else "N/A"
+    )
+    if top_lender.expected_ticket_min is not None and top_lender.expected_ticket_max is not None:
+        ticket_text = f"₹{top_lender.expected_ticket_min:.1f}L - ₹{top_lender.expected_ticket_max:.1f}L"
+    elif top_lender.expected_ticket_max is not None:
+        ticket_text = f"Up to ₹{top_lender.expected_ticket_max:.1f}L"
+    elif top_lender.expected_ticket_min is not None:
+        ticket_text = f"From ₹{top_lender.expected_ticket_min:.1f}L"
+    else:
+        ticket_text = "Policy based"
+
     strategy_parts = []
 
     # Primary recommendation
     strategy_parts.append(
         f"**Primary Target:** {top_lender.lender_name} - {top_lender.product_name}\n"
-        f"- Eligibility Score: {top_lender.eligibility_score:.0f}/100\n"
-        f"- Approval Probability: {top_lender.approval_probability.value.upper()}\n"
-        f"- Expected Ticket: ₹{top_lender.expected_ticket_min:.1f}L - ₹{top_lender.expected_ticket_max:.1f}L\n"
+        f"- Eligibility Score: {score_text}\n"
+        f"- Approval Probability: {probability_text}\n"
+        f"- Expected Ticket: {ticket_text}\n"
     )
 
     if special_notes:
@@ -537,10 +586,20 @@ async def _generate_fallback_strategy(
     if approach_order:
         strategy_parts.append("\n**Suggested Approach Order:**")
         for idx, lender in enumerate(approach_order, start=2):
+            lender_score = (
+                f"{lender.eligibility_score:.0f}"
+                if lender.eligibility_score is not None
+                else "N/A"
+            )
+            lender_prob = (
+                lender.approval_probability.value.upper()
+                if lender.approval_probability
+                else "N/A"
+            )
             strategy_parts.append(
                 f"\n{idx}. {lender.lender_name} - {lender.product_name} "
-                f"(Score: {lender.eligibility_score:.0f}, "
-                f"Probability: {lender.approval_probability.value.upper()})"
+                f"(Score: {lender_score}, "
+                f"Probability: {lender_prob})"
             )
 
     # General advice
@@ -618,7 +677,7 @@ async def assemble_case_report(case_uuid: UUID) -> Optional[CaseReportData]:
     # Get case_id string
     async with get_db_session() as db:
         case_row = await db.fetchrow(
-            "SELECT case_id FROM cases WHERE id = $1",
+            "SELECT case_id, organization_id FROM cases WHERE id = $1",
             case_uuid
         )
 
@@ -627,6 +686,7 @@ async def assemble_case_report(case_uuid: UUID) -> Optional[CaseReportData]:
             return None
 
         case_id_str = case_row['case_id']
+        case_org_id = case_row.get("organization_id")
 
     # Load all data
     borrower = await load_borrower_features(case_uuid)
@@ -641,7 +701,11 @@ async def assemble_case_report(case_uuid: UUID) -> Optional[CaseReportData]:
     # Compute analysis
     strengths = compute_strengths(borrower, lender_matches)
     risk_flags = compute_risk_flags(borrower, checklist, lender_matches)
-    submission_strategy = await generate_submission_strategy(borrower, lender_matches)
+    submission_strategy = await generate_submission_strategy(
+        borrower,
+        lender_matches,
+        organization_id=case_org_id,
+    )
 
     # Missing data advisory
     missing_data_advisory = []
@@ -713,6 +777,9 @@ async def save_report_to_db(
     from uuid import uuid4
 
     async with get_db_session() as db:
+        case_row = await db.fetchrow("SELECT organization_id FROM cases WHERE id = $1", case_uuid)
+        organization_id = case_row["organization_id"] if case_row else None
+
         # Convert report to JSON
         report_json = report_data.model_dump_json()
 
@@ -720,11 +787,12 @@ async def save_report_to_db(
         report_id = uuid4()
         await db.execute(
             """
-            INSERT INTO case_reports (id, case_id, report_type, storage_key, report_data, generated_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO case_reports (id, case_id, organization_id, report_type, storage_key, report_data, generated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             """,
             report_id,
             case_uuid,
+            organization_id,
             'full',
             storage_key,
             report_json,

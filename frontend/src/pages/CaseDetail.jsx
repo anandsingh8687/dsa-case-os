@@ -113,11 +113,25 @@ const extractBlobErrorMessage = async (error, fallback) => {
 
 const extractApiErrorMessage = (error, fallback = 'Request failed') => {
   const payload = error?.response?.data;
-  if (!payload) return fallback;
+  if (!payload) {
+    if (typeof error?.message === 'string' && error.message.trim()) {
+      return error.message;
+    }
+    return fallback;
+  }
   if (typeof payload === 'string') return payload.slice(0, 300);
   if (typeof payload?.detail === 'string') return payload.detail;
   if (typeof payload?.message === 'string') return payload.message;
+  if (typeof error?.message === 'string' && error.message.trim()) {
+    return error.message;
+  }
   return fallback;
+};
+
+const toFiniteNumber = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(String(value).replace(/,/g, '').trim());
+  return Number.isFinite(parsed) ? parsed : null;
 };
 
 const isRetryablePipelineError = (error) => {
@@ -306,6 +320,7 @@ const CaseDetail = () => {
   const [reuploadFiles, setReuploadFiles] = useState([]);
   const [documentPreview, setDocumentPreview] = useState(null);
   const [pipelineMetrics, setPipelineMetrics] = useState(null);
+  const [pipelineQueueStatus, setPipelineQueueStatus] = useState(null);
 
   const { data: caseData, isLoading: caseLoading } = useQuery({
     queryKey: ['case', caseId],
@@ -486,6 +501,14 @@ const CaseDetail = () => {
   const rejectedEligibilityResults = allEligibilityResults
     .filter((result) => result.hard_filter_status === 'fail');
   const extractedFields = Array.isArray(extractedFieldsData?.data) ? extractedFieldsData.data : [];
+  const extractedFieldMap = useMemo(() => {
+    const map = new Map();
+    extractedFields.forEach((field) => {
+      if (!field?.field_name || map.has(field.field_name)) return;
+      map.set(field.field_name, field.field_value);
+    });
+    return map;
+  }, [extractedFields]);
   const additionalApplicants = useMemo(() => {
     const primaryPan = String(features?.pan_number || '').trim().toUpperCase();
     const primaryAadhaar = String(features?.aadhaar_number || '').replace(/\s+/g, '');
@@ -563,11 +586,52 @@ const CaseDetail = () => {
       }))
       .slice(0, 4);
   }, [extractedFields, features?.aadhaar_number, features?.full_name, features?.pan_number]);
-  const annualTurnoverLakhs = features?.annual_turnover;
-  const monthlyTurnoverAmount = features?.monthly_turnover ?? features?.monthly_credit_avg;
-  const avgMonthlyBalance = features?.avg_monthly_balance;
-  const monthlyCreditAvg = features?.monthly_credit_avg;
-  const monthlyEmiOutflow = features?.emi_outflow_monthly;
+  const annualTurnoverLakhs = (
+    toFiniteNumber(features?.annual_turnover)
+    ?? toFiniteNumber(extractedFieldMap.get('annual_turnover'))
+  );
+  const monthlyTurnoverAmount = (
+    toFiniteNumber(features?.monthly_turnover)
+    ?? toFiniteNumber(features?.monthly_credit_avg)
+    ?? toFiniteNumber(extractedFieldMap.get('monthly_turnover'))
+    ?? toFiniteNumber(extractedFieldMap.get('monthly_credit_avg'))
+    ?? toFiniteNumber(extractedFieldMap.get('credilo_credit_transactions_amount'))
+  );
+  const avgMonthlyBalance = (
+    toFiniteNumber(features?.avg_monthly_balance)
+    ?? toFiniteNumber(extractedFieldMap.get('avg_monthly_balance'))
+    ?? toFiniteNumber(extractedFieldMap.get('credilo_custom_average_balance'))
+    ?? toFiniteNumber(extractedFieldMap.get('credilo_average_balance'))
+  );
+  const monthlyCreditAvg = (
+    toFiniteNumber(features?.monthly_credit_avg)
+    ?? toFiniteNumber(extractedFieldMap.get('monthly_credit_avg'))
+    ?? toFiniteNumber(extractedFieldMap.get('credilo_credit_transactions_amount'))
+  );
+  const monthlyEmiOutflow = (
+    toFiniteNumber(features?.emi_outflow_monthly)
+    ?? toFiniteNumber(extractedFieldMap.get('emi_outflow_monthly'))
+    ?? toFiniteNumber(extractedFieldMap.get('credilo_total_emi_amount'))
+  );
+  const bounceCountValue = (
+    toFiniteNumber(features?.bounce_count_12m)
+    ?? toFiniteNumber(extractedFieldMap.get('bounce_count_12m'))
+    ?? toFiniteNumber(extractedFieldMap.get('credilo_no_of_emi_bounce'))
+  );
+  const bankAnalyzerSummaryRows = useMemo(() => {
+    const rows = [
+      ['Source', extractedFieldMap.get('bank_detected')],
+      ['Statements Parsed', extractedFieldMap.get('credilo_statement_count') || extractedFieldMap.get('statement_period_months')],
+      ['Transactions', extractedFieldMap.get('credilo_total_transactions') || extractedFieldMap.get('transaction_count')],
+      ['Period Start', extractedFieldMap.get('credilo_period_start')],
+      ['Period End', extractedFieldMap.get('credilo_period_end')],
+      ['Credit Amount', extractedFieldMap.get('credilo_credit_transactions_amount') || extractedFieldMap.get('total_credits_12m')],
+      ['Debit Amount', extractedFieldMap.get('credilo_debit_transactions_amount') || extractedFieldMap.get('total_debits_12m')],
+      ['EMI Count', extractedFieldMap.get('credilo_no_of_emi')],
+      ['EMI Bounce Count', extractedFieldMap.get('credilo_no_of_emi_bounce')],
+    ];
+    return rows.filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '');
+  }, [extractedFieldMap]);
   const selectedEmailLender = allEligibilityResults.find((item) => (
     normalizeToken(item.lender_name) === normalizeToken(lenderNameInput)
       && normalizeToken(item.product_name) === normalizeToken(productNameInput)
@@ -595,8 +659,9 @@ const CaseDetail = () => {
     mutationFn: async () => {
       const timings = {};
       const startedAt = performance.now();
-      let stage = 'extraction';
+      let stage = 'queue_wait';
       let stageStartedAt = performance.now();
+      setPipelineQueueStatus(null);
       const runStageWithRetry = async (fn) => {
         try {
           return await fn();
@@ -609,6 +674,29 @@ const CaseDetail = () => {
         }
       };
       try {
+        const queueState = await waitForDocumentQueue(caseId, {
+          maxAttempts: 240, // ~8 minutes for larger uploads
+          onTick: (jobs) => setPipelineQueueStatus(jobs),
+        });
+        timings.queue_wait = Number((performance.now() - stageStartedAt).toFixed(0));
+
+        const queueJobs = queueState?.document_jobs;
+        if (queueJobs?.in_progress) {
+          const pending = Number(queueJobs.queued || 0) + Number(queueJobs.processing || 0);
+          throw new Error(
+            `Document processing is still running (${pending} pending). Please wait and retry.`
+          );
+        }
+
+        const failedJobs = Number(queueJobs?.failed || 0);
+        if (failedJobs > 0) {
+          toast(`Document queue completed with ${failedJobs} failed file(s). Results may be partial.`, {
+            icon: '⚠️',
+          });
+        }
+
+        stage = 'extraction';
+        stageStartedAt = performance.now();
         const extractionResponse = await runStageWithRetry(() => runExtraction(caseId));
         timings.extraction = Number((performance.now() - stageStartedAt).toFixed(0));
         timings.extraction_backend = extractionResponse?.data?.timing_ms || null;
@@ -638,6 +726,7 @@ const CaseDetail = () => {
     },
     onSuccess: (timings) => {
       setPipelineMetrics(timings);
+      setPipelineQueueStatus(null);
       toast.success(
         `Pipeline completed: extraction ${timings.extraction}ms, scoring ${timings.scoring}ms, report ${timings.report}ms`
       );
@@ -655,16 +744,22 @@ const CaseDetail = () => {
         `${stage.toUpperCase()} failed${Number.isFinite(elapsed) ? ` after ${elapsed}ms` : ''}: ${detail}`
       );
     },
+    onSettled: () => {
+      setPipelineQueueStatus(null);
+    },
   });
 
-  const waitForDocumentQueue = async (targetCaseId) => {
-    const maxAttempts = 180; // ~6 minutes
+  const waitForDocumentQueue = async (targetCaseId, opts = {}) => {
+    const maxAttempts = Number.isFinite(opts.maxAttempts) ? opts.maxAttempts : 180; // ~6 minutes
     let latestStatus = null;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         const response = await getCaseStatus(targetCaseId);
         latestStatus = response?.data;
         const jobs = latestStatus?.document_jobs;
+        if (typeof opts.onTick === 'function') {
+          opts.onTick(jobs || null);
+        }
         if (!jobs || jobs.total === 0 || jobs.in_progress === false) {
           return latestStatus;
         }
@@ -1143,11 +1238,21 @@ const CaseDetail = () => {
                 className="flex items-center gap-2"
               >
                 <Play className="w-4 h-4" />
-                {runFullPipelineMutation.isPending ? 'Processing...' : 'Run Full Pipeline'}
+                {runFullPipelineMutation.isPending
+                  ? (pipelineQueueStatus?.in_progress
+                    ? `Waiting for OCR Queue (${pipelineQueueStatus.completion_pct || 0}%)`
+                    : 'Processing...')
+                  : 'Run Full Pipeline'}
               </Button>
               <p className="text-xs text-gray-500 mt-2">
                 Runs extraction, eligibility scoring, and report generation sequentially.
               </p>
+              {runFullPipelineMutation.isPending && pipelineQueueStatus?.in_progress && (
+                <p className="text-xs text-blue-700 mt-1">
+                  Queue status: queued {pipelineQueueStatus.queued || 0}, processing {pipelineQueueStatus.processing || 0},
+                  completed {pipelineQueueStatus.completed || 0}, failed {pipelineQueueStatus.failed || 0}
+                </p>
+              )}
               {pipelineMetrics && (
                 <p className="text-xs text-blue-700 mt-2">
                   Last run timing: extraction {pipelineMetrics.extraction || 0}ms, scoring {pipelineMetrics.scoring || 0}ms,
@@ -1297,12 +1402,25 @@ const CaseDetail = () => {
                   <div className="flex justify-between items-start">
                     <span className="text-sm text-gray-600">Bounce Count (12M)</span>
                     <span className={`font-medium text-right ${
-                      features.bounce_count_12m > 0 ? 'text-red-600' : 'text-green-600'
+                      bounceCountValue > 0 ? 'text-red-600' : 'text-green-600'
                     }`}>
-                      {features.bounce_count_12m !== null && features.bounce_count_12m !== undefined ? features.bounce_count_12m : 'N/A'}
+                      {bounceCountValue !== null && bounceCountValue !== undefined ? bounceCountValue : 'N/A'}
                     </span>
                   </div>
                 </div>
+                {bankAnalyzerSummaryRows.length > 0 && (
+                  <div className="pt-3 mt-3 border-t border-gray-100">
+                    <h4 className="text-sm font-semibold text-gray-900 mb-2">Bank Analyzer Output</h4>
+                    <div className="space-y-1">
+                      {bankAnalyzerSummaryRows.map(([label, value]) => (
+                        <div key={`bank-metric-${label}`} className="flex justify-between items-start text-sm">
+                          <span className="text-gray-600">{label}</span>
+                          <span className="font-medium text-right">{String(value)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* CREDIT Section */}

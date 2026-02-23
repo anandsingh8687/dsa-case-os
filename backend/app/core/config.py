@@ -66,6 +66,31 @@ class Settings(BaseSettings):
     DOC_QUEUE_ENABLED: bool = os.getenv("DOC_QUEUE_ENABLED", "true").lower() == "true"
     DOC_QUEUE_WORKER_CONCURRENCY: int = int(os.getenv("DOC_QUEUE_WORKER_CONCURRENCY", "3"))
     DOC_QUEUE_POLL_INTERVAL_MS: int = int(os.getenv("DOC_QUEUE_POLL_INTERVAL_MS", "750"))
+    DOC_QUEUE_MAX_ATTEMPTS: int = int(os.getenv("DOC_QUEUE_MAX_ATTEMPTS", "2"))
+
+    # Redis/RQ
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    RQ_ASYNC_ENABLED: bool = os.getenv("RQ_ASYNC_ENABLED", "false").lower() == "true"
+    RQ_DEFAULT_TIMEOUT: int = int(os.getenv("RQ_DEFAULT_TIMEOUT", "600"))
+    RQ_QUEUE_DEFAULT: str = os.getenv("RQ_QUEUE_DEFAULT", "default")
+    RQ_QUEUE_OCR: str = os.getenv("RQ_QUEUE_OCR", "ocr")
+    RQ_QUEUE_REPORTS: str = os.getenv("RQ_QUEUE_REPORTS", "reports")
+    RQ_QUEUE_RAG: str = os.getenv("RQ_QUEUE_RAG", "rag")
+    RQ_QUEUE_WHATSAPP: str = os.getenv("RQ_QUEUE_WHATSAPP", "whatsapp")
+
+    # Multi-tenancy
+    DEFAULT_ORG_NAME: str = os.getenv("DEFAULT_ORG_NAME", "Credilo Workspace")
+
+    # WhatsApp Cloud API (Meta)
+    WHATSAPP_CLOUD_ACCESS_TOKEN: Optional[str] = os.getenv("WHATSAPP_CLOUD_ACCESS_TOKEN")
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: Optional[str] = os.getenv("WHATSAPP_CLOUD_PHONE_NUMBER_ID")
+    WHATSAPP_CLOUD_BUSINESS_NUMBER: str = os.getenv("WHATSAPP_CLOUD_BUSINESS_NUMBER", "8130781881")
+    WHATSAPP_CLOUD_VERIFY_TOKEN: str = os.getenv("WHATSAPP_CLOUD_VERIFY_TOKEN", "credilo-whatsapp-verify")
+    WHATSAPP_CLOUD_API_VERSION: str = os.getenv("WHATSAPP_CLOUD_API_VERSION", "v21.0")
+
+    # RAG
+    RAG_EMBEDDING_MODEL: str = os.getenv("RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "8"))
 
     # WhatsApp Service
     WHATSAPP_SERVICE_URL: str = os.getenv("WHATSAPP_SERVICE_URL", "http://localhost:3001")
@@ -86,6 +111,12 @@ class Settings(BaseSettings):
         "CREDILO_FALLBACK_TO_LOCAL",
         "true",
     ).lower() == "true"
+    EXTRACTION_BANK_ANALYSIS_TIMEOUT_SECONDS: float = float(
+        os.getenv("EXTRACTION_BANK_ANALYSIS_TIMEOUT_SECONDS", "180")
+    )
+    EXTRACTION_MAX_BANK_STATEMENTS_PER_RUN: int = int(
+        os.getenv("EXTRACTION_MAX_BANK_STATEMENTS_PER_RUN", "12")
+    )
 
     # Case ID Format
     CASE_ID_PREFIX: str = "CASE"
