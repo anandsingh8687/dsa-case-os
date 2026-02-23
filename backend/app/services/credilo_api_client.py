@@ -80,3 +80,42 @@ class CrediloApiClient:
         if not isinstance(payload, dict):
             raise CrediloApiError("Credilo preview payload is not a JSON object")
         return payload
+
+    async def process_excel(self, pdf_paths: List[str]) -> bytes:
+        """Send PDFs to Credilo process endpoint and return XLSX bytes."""
+        files = []
+        file_handles = []
+        for path in pdf_paths:
+            p = Path(path)
+            if not p.exists() or not p.is_file():
+                continue
+            handle = p.open("rb")
+            file_handles.append(handle)
+            files.append(("files", (p.name, handle, "application/pdf")))
+
+        if not files:
+            raise CrediloApiError("No valid PDF files found for Credilo process upload")
+
+        if not self.process_url:
+            raise CrediloApiError("Credilo process URL is not configured")
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                response = await client.post(self.process_url, files=files)
+        finally:
+            for handle in file_handles:
+                handle.close()
+
+        if response.status_code != 200:
+            detail = response.text.strip()[:1200]
+            raise CrediloApiError(
+                f"Credilo process failed ({response.status_code}): {detail}"
+            )
+
+        content_type = response.headers.get("content-type", "").lower()
+        if "spreadsheetml" not in content_type and "excel" not in content_type:
+            raise CrediloApiError(
+                f"Unexpected Credilo process content-type: {content_type or 'unknown'}"
+            )
+
+        return response.content

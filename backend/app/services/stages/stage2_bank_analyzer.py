@@ -4,10 +4,13 @@ Uses Credilo parser for PDF extraction, then computes metrics.
 """
 import logging
 import asyncio
+import io
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, date, timezone
 from collections import defaultdict
 from decimal import Decimal
+
+import pandas as pd
 
 from app.core.config import settings
 from app.services.credilo_api_client import CrediloApiClient, CrediloApiError
@@ -68,8 +71,12 @@ class BankStatementAnalyzer:
                 return await self._analyze_with_remote_credilo(pdf_paths)
             except Exception as exc:
                 logger.warning("Remote Credilo preview failed: %s", exc)
-                if not self.allow_local_fallback:
-                    return BankAnalysisResult(confidence=0.0, source="credilo_remote")
+                try:
+                    return await self._analyze_with_remote_process(pdf_paths)
+                except Exception as process_exc:
+                    logger.warning("Remote Credilo process fallback failed: %s", process_exc)
+                    if not self.allow_local_fallback:
+                        return BankAnalysisResult(confidence=0.0, source="credilo_remote")
 
         return await self._analyze_with_local_parser(pdf_paths)
 
@@ -117,6 +124,24 @@ class BankStatementAnalyzer:
             bank_detected=bank_detected,
             account_number=account_number,
             source="credilo_remote",
+            credilo_summary=credilo_summary,
+        )
+
+    async def _analyze_with_remote_process(self, pdf_paths: List[str]) -> BankAnalysisResult:
+        """Fallback analyzer using Credilo /api/process XLSX output."""
+        workbook_bytes = await self.credilo_client.process_excel(pdf_paths)
+        transactions, bank_detected, account_number, credilo_summary = self._extract_transactions_from_remote_workbook(
+            workbook_bytes
+        )
+
+        if not transactions:
+            raise CrediloApiError("Credilo process fallback produced no transactions")
+
+        return await self.analyze_from_transactions(
+            transactions=transactions,
+            bank_detected=bank_detected,
+            account_number=account_number,
+            source="credilo_process_xlsx",
             credilo_summary=credilo_summary,
         )
 
@@ -253,6 +278,61 @@ class BankStatementAnalyzer:
             "total_emi_bounce_amount": self._to_optional_float(grand.get("totalEMIBounceAmount")),
             "no_of_loan_disbursal": self._to_int(grand.get("noOfLoanDisbursal")),
             "loan_disbursal_amount": self._to_optional_float(grand.get("loanDisbursalAmount")),
+        }
+
+        return all_transactions, bank_detected, account_number, credilo_summary
+
+    def _extract_transactions_from_remote_workbook(
+        self,
+        workbook_bytes: bytes,
+    ) -> Tuple[List[Dict[str, Any]], Optional[str], Optional[str], Dict[str, Any]]:
+        """Parse Credilo process XLSX into normalized transaction rows."""
+        excel = pd.ExcelFile(io.BytesIO(workbook_bytes))
+        all_transactions: List[Dict[str, Any]] = []
+        bank_detected: Optional[str] = None
+        account_number: Optional[str] = None
+
+        for sheet in excel.sheet_names:
+            try:
+                dataframe = pd.read_excel(excel, sheet_name=sheet)
+            except Exception:
+                continue
+
+            columns_map = {str(col).strip().lower(): col for col in dataframe.columns}
+            date_col = columns_map.get("transactiondate") or columns_map.get("transaction date")
+            narration_col = columns_map.get("narration")
+            withdrawal_col = columns_map.get("withdrawalamt") or columns_map.get("withdrawal amt")
+            deposit_col = columns_map.get("depositamt") or columns_map.get("deposit amt")
+            closing_col = columns_map.get("closingbalance") or columns_map.get("closing balance")
+
+            if not date_col or not narration_col:
+                continue
+
+            if not bank_detected:
+                bank_detected = str(sheet).split("_")[0] if "_" in str(sheet) else str(sheet)
+            if not account_number:
+                sheet_parts = str(sheet).split("_")
+                if len(sheet_parts) > 1 and sheet_parts[-1].isdigit():
+                    account_number = sheet_parts[-1]
+
+            for _, row in dataframe.iterrows():
+                transaction_date = row.get(date_col)
+                narration = row.get(narration_col)
+                if pd.isna(transaction_date) and pd.isna(narration):
+                    continue
+
+                transaction = {
+                    "transactionDate": transaction_date,
+                    "narration": "" if pd.isna(narration) else str(narration),
+                    "withdrawalAmt": None if withdrawal_col is None or pd.isna(row.get(withdrawal_col)) else row.get(withdrawal_col),
+                    "depositAmt": None if deposit_col is None or pd.isna(row.get(deposit_col)) else row.get(deposit_col),
+                    "closingBalance": None if closing_col is None or pd.isna(row.get(closing_col)) else row.get(closing_col),
+                }
+                all_transactions.append(transaction)
+
+        credilo_summary = {
+            "statement_count": len(excel.sheet_names),
+            "total_transactions": len(all_transactions),
         }
 
         return all_transactions, bank_detected, account_number, credilo_summary
