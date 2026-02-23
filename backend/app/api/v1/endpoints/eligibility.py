@@ -21,10 +21,22 @@ from app.services.stages.stage4_eligibility import (
     load_eligibility_results
 )
 from app.core.enums import CaseStatus
+from app.core.deps import CurrentUser
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/eligibility", tags=["eligibility"])
+
+
+def _scoped_case_query(case_id: str, current_user):
+    query = select(Case).where(Case.case_id == case_id)
+    org_id = getattr(current_user, "organization_id", None)
+    if current_user.role != "super_admin":
+        if org_id:
+            query = query.where(Case.organization_id == org_id)
+        else:
+            query = query.where(Case.user_id == current_user.id)
+    return query
 
 
 def _summarize_eligibility(response: EligibilityResponse) -> Dict[str, Any]:
@@ -91,6 +103,7 @@ def _summarize_eligibility(response: EligibilityResponse) -> Dict[str, Any]:
 @router.post("/case/{case_id}/score", response_model=EligibilityResponse)
 async def score_eligibility(
     case_id: str,
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db)
 ):
     """Score eligibility for a case against all active lenders.
@@ -106,7 +119,7 @@ async def score_eligibility(
 
     # 1. Fetch case
     result = await db.execute(
-        select(Case).where(Case.case_id == case_id)
+        _scoped_case_query(case_id, current_user)
     )
     case = result.scalar_one_or_none()
 
@@ -180,6 +193,7 @@ async def score_eligibility(
 @router.get("/case/{case_id}/results", response_model=EligibilityResponse)
 async def get_eligibility_results(
     case_id: str,
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db)
 ):
     """Get saved eligibility results for a case.
@@ -191,7 +205,7 @@ async def get_eligibility_results(
 
     # Fetch case
     result = await db.execute(
-        select(Case).where(Case.case_id == case_id)
+        _scoped_case_query(case_id, current_user)
     )
     case = result.scalar_one_or_none()
 
@@ -218,6 +232,7 @@ async def get_eligibility_results(
 @router.get("/case/{case_id}/explain")
 async def explain_eligibility(
     case_id: str,
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -226,7 +241,7 @@ async def explain_eligibility(
     This endpoint is designed for Fix 4 (BRE Clarity): it converts scoring output
     into concise explanations and actionable next steps.
     """
-    result = await db.execute(select(Case).where(Case.case_id == case_id))
+    result = await db.execute(_scoped_case_query(case_id, current_user))
     case = result.scalar_one_or_none()
     if not case:
         raise HTTPException(status_code=404, detail=f"Case {case_id} not found")

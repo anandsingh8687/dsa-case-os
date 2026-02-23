@@ -36,9 +36,10 @@ def _as_float(value):
 
 def _scoped_case_query(case_id: str, current_user):
     query = select(Case).where(Case.case_id == case_id)
+    org_id = getattr(current_user, "organization_id", None)
     if current_user.role != "super_admin":
-        if current_user.organization_id:
-            query = query.where(Case.organization_id == current_user.organization_id)
+        if org_id:
+            query = query.where(Case.organization_id == org_id)
         else:
             query = query.where(Case.user_id == current_user.id)
     return query

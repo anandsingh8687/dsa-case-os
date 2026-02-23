@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import FileResponse
 
+from app.core.deps import CurrentUser
 from app.schemas.shared import CaseReportData
 from app.services.stages.stage5_report import (
     assemble_case_report,
@@ -34,7 +35,7 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 # HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════
 
-async def get_case_uuid_from_case_id(case_id: str) -> UUID:
+async def get_case_uuid_from_case_id(case_id: str, current_user) -> UUID:
     """Convert case_id string to UUID.
 
     Args:
@@ -47,10 +48,24 @@ async def get_case_uuid_from_case_id(case_id: str) -> UUID:
         HTTPException: If case not found
     """
     async with get_db_session() as db:
-        row = await db.fetchrow(
-            "SELECT id FROM cases WHERE case_id = $1",
-            case_id
-        )
+        org_id = getattr(current_user, "organization_id", None)
+        if current_user.role == "super_admin":
+            row = await db.fetchrow(
+                "SELECT id FROM cases WHERE case_id = $1",
+                case_id
+            )
+        elif org_id:
+            row = await db.fetchrow(
+                "SELECT id FROM cases WHERE case_id = $1 AND organization_id = $2",
+                case_id,
+                org_id,
+            )
+        else:
+            row = await db.fetchrow(
+                "SELECT id FROM cases WHERE case_id = $1 AND user_id = $2",
+                case_id,
+                current_user.id,
+            )
 
         if not row:
             raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
@@ -78,7 +93,7 @@ async def update_case_status(case_uuid: UUID, status: CaseStatus) -> None:
 # ═══════════════════════════════════════════════════════════════
 
 @router.post("/case/{case_id}/generate")
-async def generate_report(case_id: str):
+async def generate_report(case_id: str, current_user: CurrentUser):
     """Generate a complete case intelligence report.
 
     This endpoint:
@@ -101,7 +116,7 @@ async def generate_report(case_id: str):
 
     try:
         # Get case UUID
-        case_uuid = await get_case_uuid_from_case_id(case_id)
+        case_uuid = await get_case_uuid_from_case_id(case_id, current_user)
 
         # Assemble report data
         assemble_started = time.perf_counter()
@@ -169,7 +184,7 @@ async def generate_report(case_id: str):
 
 
 @router.get("/case/{case_id}/report", response_model=CaseReportData)
-async def get_case_report(case_id: str):
+async def get_case_report(case_id: str, current_user: CurrentUser):
     """Get the generated report data for a case.
 
     This returns the structured JSON report data, not the PDF.
@@ -184,7 +199,7 @@ async def get_case_report(case_id: str):
 
     try:
         # Get case UUID
-        case_uuid = await get_case_uuid_from_case_id(case_id)
+        case_uuid = await get_case_uuid_from_case_id(case_id, current_user)
 
         # Load report from database
         report_data = await load_report_from_db(case_uuid)
@@ -205,7 +220,7 @@ async def get_case_report(case_id: str):
 
 
 @router.get("/case/{case_id}/report/pdf")
-async def download_report_pdf(case_id: str):
+async def download_report_pdf(case_id: str, current_user: CurrentUser):
     """Download the PDF report for a case.
 
     Args:
@@ -218,7 +233,7 @@ async def download_report_pdf(case_id: str):
 
     try:
         # Get case UUID
-        case_uuid = await get_case_uuid_from_case_id(case_id)
+        case_uuid = await get_case_uuid_from_case_id(case_id, current_user)
 
         # Get storage key from database
         async with get_db_session() as db:
@@ -267,7 +282,7 @@ async def download_report_pdf(case_id: str):
 
 
 @router.get("/case/{case_id}/report/whatsapp")
-async def get_whatsapp_summary(case_id: str):
+async def get_whatsapp_summary(case_id: str, current_user: CurrentUser):
     """Get WhatsApp-friendly summary for a case.
 
     This returns a short text summary that can be copied and pasted into WhatsApp.
@@ -282,7 +297,7 @@ async def get_whatsapp_summary(case_id: str):
 
     try:
         # Get case UUID
-        case_uuid = await get_case_uuid_from_case_id(case_id)
+        case_uuid = await get_case_uuid_from_case_id(case_id, current_user)
 
         # Load report from database
         report_data = await load_report_from_db(case_uuid)
@@ -309,7 +324,7 @@ async def get_whatsapp_summary(case_id: str):
 
 
 @router.get("/case/{case_id}/report/regenerate")
-async def regenerate_report(case_id: str):
+async def regenerate_report(case_id: str, current_user: CurrentUser):
     """Regenerate report for a case (re-runs the entire report generation).
 
     This is useful when:
@@ -326,7 +341,7 @@ async def regenerate_report(case_id: str):
     logger.info(f"Regenerating report for case {case_id}")
 
     # Simply call the generate endpoint
-    return await generate_report(case_id)
+    return await generate_report(case_id, current_user)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -337,7 +352,7 @@ from app.services.llm_report_service import llm_report_service
 
 
 @router.get("/case/{case_id}/narrative/profile")
-async def get_narrative_profile_report(case_id: str):
+async def get_narrative_profile_report(case_id: str, current_user: CurrentUser):
     """
     Generate LLM-based narrative profile report.
 
@@ -365,6 +380,7 @@ async def get_narrative_profile_report(case_id: str):
     logger.info(f"Generating narrative profile report for case {case_id}")
 
     try:
+        await get_case_uuid_from_case_id(case_id, current_user)
         report = await llm_report_service.generate_borrower_profile_report(case_id)
         return report
     except Exception as e:
@@ -373,7 +389,7 @@ async def get_narrative_profile_report(case_id: str):
 
 
 @router.get("/case/{case_id}/narrative/eligibility")
-async def get_narrative_eligibility_report(case_id: str):
+async def get_narrative_eligibility_report(case_id: str, current_user: CurrentUser):
     """
     Generate LLM-based narrative eligibility report.
 
@@ -396,6 +412,7 @@ async def get_narrative_eligibility_report(case_id: str):
     logger.info(f"Generating narrative eligibility report for case {case_id}")
 
     try:
+        await get_case_uuid_from_case_id(case_id, current_user)
         report = await llm_report_service.generate_eligibility_report(case_id)
         return report
     except Exception as e:
@@ -404,7 +421,7 @@ async def get_narrative_eligibility_report(case_id: str):
 
 
 @router.get("/case/{case_id}/narrative/documents")
-async def get_narrative_document_report(case_id: str):
+async def get_narrative_document_report(case_id: str, current_user: CurrentUser):
     """
     Generate LLM-based narrative document summary.
 
@@ -426,6 +443,7 @@ async def get_narrative_document_report(case_id: str):
     logger.info(f"Generating narrative document report for case {case_id}")
 
     try:
+        await get_case_uuid_from_case_id(case_id, current_user)
         report = await llm_report_service.generate_document_summary(case_id)
         return report
     except Exception as e:
@@ -434,7 +452,7 @@ async def get_narrative_document_report(case_id: str):
 
 
 @router.get("/case/{case_id}/narrative/comprehensive")
-async def get_comprehensive_narrative_report(case_id: str):
+async def get_comprehensive_narrative_report(case_id: str, current_user: CurrentUser):
     """
     Generate comprehensive LLM-based narrative report.
 
@@ -465,6 +483,7 @@ async def get_comprehensive_narrative_report(case_id: str):
     logger.info(f"Generating comprehensive narrative report for case {case_id}")
 
     try:
+        await get_case_uuid_from_case_id(case_id, current_user)
         report = await llm_report_service.generate_comprehensive_report(case_id)
         return report
     except Exception as e:
