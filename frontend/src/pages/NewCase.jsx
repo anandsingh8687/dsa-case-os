@@ -14,7 +14,15 @@ import {
   runScoring,
   generateReport,
 } from '../api/services';
-import { Button, Input, Select, Card, ProgressBar } from '../components/ui';
+import {
+  Button,
+  ActionButton,
+  Input,
+  Select,
+  Card,
+  ProgressBar,
+  WorkflowOptionCard,
+} from '../components/ui';
 import apiClient from '../api/client';
 
 const ENTITY_OPTIONS = [
@@ -442,55 +450,36 @@ const NewCase = () => {
             </p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-3xl mx-auto">
-              <button
+              <WorkflowOptionCard
+                icon={Search}
+                title="Run Quick Scan"
+                description="Check eligibility first, then convert into a full case with prefilled details."
+                highlights={[
+                  'Instant lender snapshot',
+                  'No initial document upload required',
+                  'Seamless continuation to full case',
+                ]}
                 onClick={() => navigate('/quick-scan', { state: { fromNewCase: true } })}
-                className="group p-6 border border-blue-200 bg-blue-50 rounded-xl hover:bg-blue-100 transition-colors text-left"
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <Search className="w-8 h-8 text-primary" />
-                </div>
-                <h3 className="text-lg font-semibold mb-2 text-primary">
-                  Run Quick Scan
-                </h3>
-                <p className="text-sm text-gray-600 mb-4">
-                  Check eligibility first, then convert this into full case with prefill.
-                </p>
-                <div className="text-xs text-blue-700 font-medium">
-                  ✓ Instant lender snapshot<br />
-                  ✓ No initial document upload required<br />
-                  ✓ Seamless continuation to full case
-                </div>
-              </button>
+                accent="blue"
+              />
 
-              <button
+              <WorkflowOptionCard
+                icon={Upload}
+                title="Upload Documents"
+                description="Upload GST and bank docs first. We detect GSTIN and auto-fill borrower details."
+                highlights={[
+                  'Auto-fills borrower trade/legal name',
+                  'Auto-fills entity type and pincode',
+                  'Calculates business vintage',
+                  'Saves time and reduces errors',
+                ]}
+                badge="SMART"
                 onClick={() => {
                   setWorkflowMode('docs-first');
-                  // Create a minimal case first
                   handleDocsFirstStart();
                 }}
-                className="group p-6 border-2 border-primary bg-primary/5 rounded-xl hover:bg-primary/10 transition-all text-left relative overflow-hidden"
-              >
-                <div className="absolute top-2 right-2">
-                  <span className="text-xs font-bold text-primary bg-white px-2 py-1 rounded-full shadow-sm">
-                    ✨ SMART
-                  </span>
-                </div>
-                <div className="flex items-center justify-between mb-3">
-                  <Upload className="w-8 h-8 text-primary" />
-                </div>
-                <h3 className="text-lg font-semibold mb-2 text-primary">
-                  Upload Documents
-                </h3>
-                <p className="text-sm text-gray-600 mb-4">
-                  Upload GST and bank docs first. We detect GSTIN and auto-fill borrower details.
-                </p>
-                <div className="text-xs text-primary font-medium">
-                  ✓ Auto-fills borrower trade/legal name<br />
-                  ✓ Auto-fills entity type & pincode<br />
-                  ✓ Calculates business vintage<br />
-                  ✓ Saves time & reduces errors
-                </div>
-              </button>
+                accent="primary"
+              />
             </div>
 
             <div className="mt-6">
@@ -743,15 +732,19 @@ const NewCase = () => {
             <Button variant="outline" onClick={() => setStep(0)}>
               Back
             </Button>
-            <Button
+            <ActionButton
               variant="primary"
               onClick={handleStep2Submit}
-              disabled={uploadMutation.isPending || files.length === 0}
+              loading={uploadMutation.isPending}
+              loadingText={
+                uploadPhase === 'server_processing'
+                  ? 'Processing Documents on Server...'
+                  : 'Uploading...'
+              }
+              disabled={files.length === 0}
             >
-              {uploadMutation.isPending
-                ? (uploadPhase === 'server_processing' ? 'Processing Documents on Server...' : 'Uploading...')
-                : 'Upload & Continue'}
-            </Button>
+              Upload & Continue
+            </ActionButton>
           </div>
         </Card>
       )}
@@ -870,15 +863,19 @@ const NewCase = () => {
             <Button variant="outline" onClick={() => setStep(1)}>
               Back
             </Button>
-            <Button
+            <ActionButton
               variant="primary"
               onClick={handleStep2Submit}
-              disabled={uploadMutation.isPending || files.length === 0}
+              loading={uploadMutation.isPending}
+              loadingText={
+                uploadPhase === 'server_processing'
+                  ? 'Processing Documents on Server...'
+                  : 'Uploading...'
+              }
+              disabled={files.length === 0}
             >
-              {uploadMutation.isPending
-                ? (uploadPhase === 'server_processing' ? 'Processing Documents on Server...' : 'Uploading...')
-                : 'Upload & Continue'}
-            </Button>
+              Upload & Continue
+            </ActionButton>
           </div>
         </Card>
       )}

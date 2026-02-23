@@ -152,6 +152,12 @@ def _decode_scan_data(raw_value: Any) -> Dict[str, Any]:
     return {}
 
 
+def _is_missing_org_column_error(error: Exception) -> bool:
+    return "organization_id" in str(error).lower() and (
+        "column" in str(error).lower() or "does not exist" in str(error).lower()
+    )
+
+
 @router.post("", response_model=QuickScanResponse)
 async def run_quick_scan(request: QuickScanRequest, current_user: CurrentUser):
     """Run instant BL/PL/HL quick scan against available lender rules."""
@@ -291,18 +297,33 @@ async def run_quick_scan(request: QuickScanRequest, current_user: CurrentUser):
     user_org_id = getattr(current_user, "organization_id", None)
 
     async with get_db_session() as db:
-        scan_id = await db.fetchval(
-            """
-            INSERT INTO quick_scans (user_id, organization_id, loan_type, pincode, scan_data)
-            VALUES ($1, $2, $3, $4, $5::jsonb)
-            RETURNING id::text
-            """,
-            current_user.id,
-            user_org_id,
-            request.loan_type,
-            request.pincode,
-            json.dumps(scan_record),
-        )
+        try:
+            scan_id = await db.fetchval(
+                """
+                INSERT INTO quick_scans (user_id, organization_id, loan_type, pincode, scan_data)
+                VALUES ($1, $2, $3, $4, $5::jsonb)
+                RETURNING id::text
+                """,
+                current_user.id,
+                user_org_id,
+                request.loan_type,
+                request.pincode,
+                json.dumps(scan_record),
+            )
+        except Exception as error:
+            if not _is_missing_org_column_error(error):
+                raise
+            scan_id = await db.fetchval(
+                """
+                INSERT INTO quick_scans (user_id, loan_type, pincode, scan_data)
+                VALUES ($1, $2, $3, $4::jsonb)
+                RETURNING id::text
+                """,
+                current_user.id,
+                request.loan_type,
+                request.pincode,
+                json.dumps(scan_record),
+            )
 
     return QuickScanResponse(
         scan_id=scan_id,
@@ -332,15 +353,28 @@ async def get_quick_scan(scan_id: UUID, current_user: CurrentUser):
                 scan_id,
             )
         elif getattr(current_user, "organization_id", None):
-            row = await db.fetchrow(
-                """
-                SELECT scan_data
-                FROM quick_scans
-                WHERE id = $1 AND organization_id = $2
-                """,
-                scan_id,
-                getattr(current_user, "organization_id", None),
-            )
+            try:
+                row = await db.fetchrow(
+                    """
+                    SELECT scan_data
+                    FROM quick_scans
+                    WHERE id = $1 AND organization_id = $2
+                    """,
+                    scan_id,
+                    getattr(current_user, "organization_id", None),
+                )
+            except Exception as error:
+                if not _is_missing_org_column_error(error):
+                    raise
+                row = await db.fetchrow(
+                    """
+                    SELECT scan_data
+                    FROM quick_scans
+                    WHERE id = $1 AND user_id = $2
+                    """,
+                    scan_id,
+                    current_user.id,
+                )
         else:
             row = await db.fetchrow(
                 """
@@ -368,15 +402,28 @@ async def get_quick_scan_card(scan_id: UUID, current_user: CurrentUser):
         if current_user.role == "super_admin":
             row = await db.fetchrow("SELECT scan_data FROM quick_scans WHERE id = $1", scan_id)
         elif getattr(current_user, "organization_id", None):
-            row = await db.fetchrow(
-                """
-                SELECT scan_data
-                FROM quick_scans
-                WHERE id = $1 AND organization_id = $2
-                """,
-                scan_id,
-                getattr(current_user, "organization_id", None),
-            )
+            try:
+                row = await db.fetchrow(
+                    """
+                    SELECT scan_data
+                    FROM quick_scans
+                    WHERE id = $1 AND organization_id = $2
+                    """,
+                    scan_id,
+                    getattr(current_user, "organization_id", None),
+                )
+            except Exception as error:
+                if not _is_missing_org_column_error(error):
+                    raise
+                row = await db.fetchrow(
+                    """
+                    SELECT scan_data
+                    FROM quick_scans
+                    WHERE id = $1 AND user_id = $2
+                    """,
+                    scan_id,
+                    current_user.id,
+                )
         else:
             row = await db.fetchrow(
                 """

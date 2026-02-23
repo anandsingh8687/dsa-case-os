@@ -63,6 +63,11 @@ class FeatureAssembler:
         """
         self.confidence_threshold = confidence_threshold
 
+    @staticmethod
+    def _has_model_attr(model_cls, attr_name: str) -> bool:
+        """Schema-compatible guard for optional model fields."""
+        return hasattr(model_cls, attr_name)
+
     async def assemble_features(
         self,
         db: AsyncSession,
@@ -353,17 +358,24 @@ class FeatureAssembler:
             # Update existing record
             for key, value in feature_dict.items():
                 setattr(existing, key, value)
-            if not existing.organization_id and case_org_id:
+            if (
+                self._has_model_attr(BorrowerFeature, "organization_id")
+                and not getattr(existing, "organization_id", None)
+                and case_org_id
+            ):
                 existing.organization_id = case_org_id
             borrower_feature = existing
             logger.info(f"Updated feature vector for case {case_id}")
         else:
             # Create new record
-            borrower_feature = BorrowerFeature(
-                case_id=case.id,
-                organization_id=case_org_id,
-                **feature_dict
-            )
+            feature_kwargs = {
+                "case_id": case.id,
+                **feature_dict,
+            }
+            if self._has_model_attr(BorrowerFeature, "organization_id"):
+                feature_kwargs["organization_id"] = case_org_id
+
+            borrower_feature = BorrowerFeature(**feature_kwargs)
             db.add(borrower_feature)
             logger.info(f"Created feature vector for case {case_id}")
 
@@ -402,15 +414,18 @@ class FeatureAssembler:
         case_org_id = getattr(case, "organization_id", None)
         saved_fields = []
         for field_item in fields:
-            extracted_field = ExtractedField(
-                case_id=case.id,
-                document_id=document_id,
-                organization_id=case_org_id,
-                field_name=field_item.field_name,
-                field_value=field_item.field_value,
-                confidence=field_item.confidence,
-                source=field_item.source
-            )
+            extracted_field_kwargs = {
+                "case_id": case.id,
+                "document_id": document_id,
+                "field_name": field_item.field_name,
+                "field_value": field_item.field_value,
+                "confidence": field_item.confidence,
+                "source": field_item.source,
+            }
+            if self._has_model_attr(ExtractedField, "organization_id"):
+                extracted_field_kwargs["organization_id"] = case_org_id
+
+            extracted_field = ExtractedField(**extracted_field_kwargs)
             db.add(extracted_field)
             saved_fields.append(extracted_field)
 

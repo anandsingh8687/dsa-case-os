@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FileSpreadsheet, UploadCloud, Download, Loader2, ArrowRight } from 'lucide-react';
+import { FileSpreadsheet, UploadCloud, Download, ArrowRight } from 'lucide-react';
 
 import {
   processBankStatements,
@@ -13,7 +13,7 @@ import {
   runScoring,
   generateReport,
 } from '../api/services';
-import { Card, Button } from '../components/ui';
+import { Card, Button, ActionButton } from '../components/ui';
 
 const formatBytes = (bytes) => {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -35,6 +35,8 @@ const BankStatement = () => {
   const [analysisElapsedSeconds, setAnalysisElapsedSeconds] = useState(0);
   const [analysisPhase, setAnalysisPhase] = useState('idle');
   const [analysisUploadProgress, setAnalysisUploadProgress] = useState(0);
+  const [convertPhase, setConvertPhase] = useState('idle');
+  const [convertQueueStatus, setConvertQueueStatus] = useState(null);
   const [convertInput, setConvertInput] = useState({
     borrower_name: '',
     entity_type: 'proprietorship',
@@ -173,14 +175,17 @@ const BankStatement = () => {
     }
   };
 
-  const waitForDocumentQueue = async (targetCaseId) => {
-    const maxAttempts = 180;
+  const waitForDocumentQueue = async (targetCaseId, opts = {}) => {
+    const maxAttempts = Number.isFinite(opts.maxAttempts) ? opts.maxAttempts : 180;
     let latest = null;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         const response = await getCaseStatus(targetCaseId);
         latest = response?.data;
         const jobs = latest?.document_jobs;
+        if (typeof opts.onTick === 'function') {
+          opts.onTick(jobs || null);
+        }
         if (!jobs || jobs.total === 0 || jobs.in_progress === false) {
           return latest;
         }
@@ -193,6 +198,10 @@ const BankStatement = () => {
   };
 
   const convertToCaseMutation = useMutation({
+    onMutate: () => {
+      setConvertPhase('creating_case');
+      setConvertQueueStatus(null);
+    },
     mutationFn: async () => {
       const borrowerName = convertInput.borrower_name.trim();
       if (!borrowerName) {
@@ -208,6 +217,7 @@ const BankStatement = () => {
       const newCaseId = created.data.case_id;
 
       if (caseUploadEligibleFiles.length === 0) {
+        setConvertPhase('done');
         return {
           caseId: newCaseId,
           docsUploaded: false,
@@ -219,11 +229,16 @@ const BankStatement = () => {
         formData.append('files', file);
       });
 
+      setConvertPhase('uploading_docs');
       await uploadDocuments(newCaseId, formData);
 
       // Fire downstream processing in background after async document queue completes.
       void (async () => {
-        const queueState = await waitForDocumentQueue(newCaseId);
+        setConvertPhase('waiting_queue');
+        const queueState = await waitForDocumentQueue(newCaseId, {
+          maxAttempts: 240,
+          onTick: (jobs) => setConvertQueueStatus(jobs),
+        });
         const failedJobs = Number(queueState?.document_jobs?.failed || 0);
         if (failedJobs > 0) {
           toast(`Document processing finished with ${failedJobs} failed file(s).`, {
@@ -231,11 +246,14 @@ const BankStatement = () => {
           });
         }
         try {
+          setConvertPhase('running_pipeline');
           await withRetry(() => runExtraction(newCaseId));
           await withRetry(() => runScoring(newCaseId));
           await withRetry(() => generateReport(newCaseId));
+          setConvertPhase('done');
         } catch (_) {
           // User can continue from case workspace if background run fails.
+          setConvertPhase('done');
         }
       })();
 
@@ -253,7 +271,15 @@ const BankStatement = () => {
       navigate(`/cases/${caseId}`);
     },
     onError: (error) => {
+      setConvertPhase('idle');
+      setConvertQueueStatus(null);
       toast.error(error?.message || error.response?.data?.detail || 'Failed to convert to full case.');
+    },
+    onSettled: () => {
+      window.setTimeout(() => {
+        setConvertPhase('idle');
+        setConvertQueueStatus(null);
+      }, 1000);
     },
   });
 
@@ -316,23 +342,17 @@ const BankStatement = () => {
         )}
 
         <div className="mt-6 flex gap-3">
-          <Button
+          <ActionButton
             onClick={runAnalysis}
-            disabled={processMutation.isPending || files.length === 0}
-            className="flex items-center gap-2"
+            disabled={files.length === 0}
+            loading={processMutation.isPending}
+            loadingText={
+              analysisPhase === 'analyzing' ? 'Analyzing Statements...' : 'Uploading Files...'
+            }
+            icon={FileSpreadsheet}
           >
-            {processMutation.isPending ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                {analysisPhase === 'analyzing' ? 'Analyzing Statements...' : 'Uploading Files...'}
-              </>
-            ) : (
-              <>
-                <FileSpreadsheet className="w-4 h-4" />
-                Run Analysis
-              </>
-            )}
-          </Button>
+            Run Analysis
+          </ActionButton>
           <Button
             variant="outline"
             onClick={() => {
@@ -419,23 +439,33 @@ const BankStatement = () => {
             Files selected: {files.length} | Eligible for auto-attach: {caseUploadEligibleFiles.length}
           </div>
           <div className="mt-4">
-            <Button
+            <ActionButton
               onClick={() => convertToCaseMutation.mutate()}
-              disabled={convertToCaseMutation.isPending}
-              className="inline-flex items-center gap-2"
+              loading={convertToCaseMutation.isPending}
+              loadingText={
+                convertPhase === 'creating_case'
+                  ? 'Creating Case...'
+                  : convertPhase === 'uploading_docs'
+                    ? 'Uploading Documents...'
+                    : convertPhase === 'waiting_queue'
+                      ? `Running OCR Queue (${convertQueueStatus?.completion_pct || 0}%)...`
+                      : convertPhase === 'running_pipeline'
+                        ? 'Running Full Pipeline...'
+                        : convertPhase === 'done'
+                          ? 'Opening Workspace...'
+                          : 'Converting...'
+              }
+              trailingIcon={ArrowRight}
             >
-              {convertToCaseMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Converting...
-                </>
-              ) : (
-                <>
-                  Convert to Full Case
-                  <ArrowRight className="w-4 h-4" />
-                </>
-              )}
-            </Button>
+              Convert to Full Case
+            </ActionButton>
+            {convertToCaseMutation.isPending && (
+              <div className="mt-2 text-xs text-blue-700">
+                {convertPhase === 'waiting_queue' && convertQueueStatus
+                  ? `Queue: queued ${convertQueueStatus.queued || 0}, processing ${convertQueueStatus.processing || 0}, completed ${convertQueueStatus.completed || 0}, failed ${convertQueueStatus.failed || 0}`
+                  : 'Preparing full case workflow in background...'}
+              </div>
+            )}
           </div>
         </Card>
       )}

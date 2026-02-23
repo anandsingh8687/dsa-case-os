@@ -45,6 +45,11 @@ class CaseEntryService:
         self.db = db
         self.storage = get_storage_backend()
 
+    @staticmethod
+    def _has_model_attr(model_cls, attr_name: str) -> bool:
+        """Check SQLAlchemy model field presence for schema-compatible writes."""
+        return hasattr(model_cls, attr_name)
+
     async def create_case(
         self,
         current_user: User,
@@ -65,18 +70,21 @@ class CaseEntryService:
             case_id = await generate_case_id(self.db)
 
             # Create case record
-            case = Case(
-                case_id=case_id,
-                user_id=current_user.id,
-                organization_id=getattr(current_user, "organization_id", None),
-                status=CaseStatus.CREATED.value,
-                borrower_name=case_data.borrower_name if case_data else None,
-                entity_type=case_data.entity_type.value if case_data and case_data.entity_type else None,
-                program_type=case_data.program_type.value if case_data and case_data.program_type else None,
-                industry_type=case_data.industry_type if case_data else None,
-                pincode=case_data.pincode if case_data else None,
-                loan_amount_requested=case_data.loan_amount_requested if case_data else None,
-            )
+            case_kwargs = {
+                "case_id": case_id,
+                "user_id": current_user.id,
+                "status": CaseStatus.CREATED.value,
+                "borrower_name": case_data.borrower_name if case_data else None,
+                "entity_type": case_data.entity_type.value if case_data and case_data.entity_type else None,
+                "program_type": case_data.program_type.value if case_data and case_data.program_type else None,
+                "industry_type": case_data.industry_type if case_data else None,
+                "pincode": case_data.pincode if case_data else None,
+                "loan_amount_requested": case_data.loan_amount_requested if case_data else None,
+            }
+            if self._has_model_attr(Case, "organization_id"):
+                case_kwargs["organization_id"] = getattr(current_user, "organization_id", None)
+
+            case = Case(**case_kwargs)
 
             self.db.add(case)
             await self.db.commit()
@@ -214,16 +222,19 @@ class CaseEntryService:
             mime_type = file.content_type or mimetypes.guess_type(file.filename)[0] or "application/octet-stream"
 
             # Create document record
-            document = Document(
-                case_id=case.id,
-                organization_id=getattr(case, "organization_id", None),
-                original_filename=file.filename,
-                storage_key=storage_key,
-                file_size_bytes=len(file_data),
-                mime_type=mime_type,
-                file_hash=file_hash,
-                status=DocumentStatus.UPLOADED.value
-            )
+            document_kwargs = {
+                "case_id": case.id,
+                "original_filename": file.filename,
+                "storage_key": storage_key,
+                "file_size_bytes": len(file_data),
+                "mime_type": mime_type,
+                "file_hash": file_hash,
+                "status": DocumentStatus.UPLOADED.value,
+            }
+            if self._has_model_attr(Document, "organization_id"):
+                document_kwargs["organization_id"] = getattr(case, "organization_id", None)
+
+            document = Document(**document_kwargs)
 
             self.db.add(document)
             await self.db.flush()
@@ -456,16 +467,19 @@ class CaseEntryService:
                         mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
                         # Create document record
-                        document = Document(
-                            case_id=case.id,
-                            organization_id=getattr(case, "organization_id", None),
-                            original_filename=filename,
-                            storage_key=storage_key,
-                            file_size_bytes=len(file_data),
-                            mime_type=mime_type,
-                            file_hash=file_hash,
-                            status=DocumentStatus.UPLOADED.value
-                        )
+                        document_kwargs = {
+                            "case_id": case.id,
+                            "original_filename": filename,
+                            "storage_key": storage_key,
+                            "file_size_bytes": len(file_data),
+                            "mime_type": mime_type,
+                            "file_hash": file_hash,
+                            "status": DocumentStatus.UPLOADED.value,
+                        }
+                        if self._has_model_attr(Document, "organization_id"):
+                            document_kwargs["organization_id"] = getattr(case, "organization_id", None)
+
+                        document = Document(**document_kwargs)
 
                         self.db.add(document)
                         await self.db.flush()
@@ -493,16 +507,19 @@ class CaseEntryService:
 
     async def _enqueue_processing_job(self, case_uuid: UUID, document_uuid: UUID) -> None:
         """Create a persistent OCR/classification job for worker queue."""
-        job = DocumentProcessingJob(
-            case_id=case_uuid,
-            document_id=document_uuid,
-            organization_id=None,
-            status="queued",
-            attempts=0,
-            max_attempts=settings.DOC_QUEUE_MAX_ATTEMPTS,
-        )
+        job_kwargs = {
+            "case_id": case_uuid,
+            "document_id": document_uuid,
+            "status": "queued",
+            "attempts": 0,
+            "max_attempts": settings.DOC_QUEUE_MAX_ATTEMPTS,
+        }
+        if self._has_model_attr(DocumentProcessingJob, "organization_id"):
+            job_kwargs["organization_id"] = None
+
+        job = DocumentProcessingJob(**job_kwargs)
         case = await self.db.get(Case, case_uuid)
-        if case:
+        if case and hasattr(job, "organization_id"):
             job.organization_id = getattr(case, "organization_id", None)
         self.db.add(job)
         await self.db.flush()
@@ -532,7 +549,7 @@ class CaseEntryService:
             query = select(Case)
             if current_user.role != "super_admin":
                 org_id = getattr(current_user, "organization_id", None)
-                if org_id:
+                if org_id and self._has_model_attr(Case, "organization_id"):
                     query = query.where(Case.organization_id == org_id)
                 else:
                     query = query.where(Case.user_id == current_user.id)
@@ -649,7 +666,7 @@ class CaseEntryService:
         query = select(Case).where(Case.case_id == case_id)
         if current_user.role != "super_admin":
             org_id = getattr(current_user, "organization_id", None)
-            if org_id:
+            if org_id and self._has_model_attr(Case, "organization_id"):
                 query = query.where(Case.organization_id == org_id)
             else:
                 query = query.where(Case.user_id == current_user.id)

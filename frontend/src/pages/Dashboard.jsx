@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { Plus, Search, Trash2 } from 'lucide-react';
 import { getCases, deleteCase } from '../api/services';
-import { Card, Button, Badge, Loading, ProgressBar } from '../components/ui';
+import { Card, Button, ActionButton, IconButton, Badge, Loading, ProgressBar } from '../components/ui';
 import { CASE_STATUSES } from '../utils/constants';
 import { formatDate, formatPercentage } from '../utils/format';
 
@@ -14,9 +14,23 @@ const Dashboard = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [showSlowLoadingHint, setShowSlowLoadingHint] = useState(false);
 
+  const withHardTimeout = (promise, timeoutMs = 20000) =>
+    new Promise((resolve, reject) => {
+      const timer = window.setTimeout(() => reject(new Error('Dashboard request timed out')), timeoutMs);
+      promise
+        .then((value) => {
+          window.clearTimeout(timer);
+          resolve(value);
+        })
+        .catch((err) => {
+          window.clearTimeout(timer);
+          reject(err);
+        });
+    });
+
   const { data: casesData, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: ['cases'],
-    queryFn: () => getCases(),
+    queryFn: () => withHardTimeout(getCases(), 20000),
     retry: 1,
     retryDelay: 1000,
     refetchOnWindowFocus: false,
@@ -90,14 +104,13 @@ const Dashboard = () => {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <Button
+        <ActionButton
           onClick={() => navigate('/cases/new')}
           variant="primary"
-          className="flex items-center gap-2"
+          icon={Plus}
         >
-          <Plus className="w-5 h-5" />
           New Case
-        </Button>
+        </ActionButton>
       </div>
 
       {error && (
@@ -208,11 +221,12 @@ const Dashboard = () => {
                     >
                       {statusInfo.label}
                     </Badge>
-                    <button
-                      type="button"
+                    <IconButton
+                      variant="danger"
                       title={`Delete ${caseItem.case_id}`}
-                      aria-label={`Delete ${caseItem.case_id}`}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors"
+                      label={`Delete ${caseItem.case_id}`}
+                      icon={Trash2}
+                      size="sm"
                       disabled={deleteCaseMutation.isPending}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -222,14 +236,12 @@ const Dashboard = () => {
                         if (!confirmed) return;
                         deleteCaseMutation.mutate(caseItem.case_id);
                       }}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    />
                   </div>
                 </div>
 
                 <div className="mb-3">
-                  <Button
+                  <ActionButton
                     size="sm"
                     variant="outline"
                     className="text-primary border-blue-200 hover:bg-blue-50"
@@ -239,7 +251,7 @@ const Dashboard = () => {
                     }}
                   >
                     Open Case
-                  </Button>
+                  </ActionButton>
                 </div>
 
                 <div className="mb-3 rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
