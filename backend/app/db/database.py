@@ -17,6 +17,7 @@ from sqlalchemy.pool import NullPool
 import asyncpg
 
 from app.core.config import settings
+from app.db.runtime_migrations import apply_runtime_migrations
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,9 @@ async def _ensure_schema_tables() -> None:
                     logger.warning(f"Schema statement warning: {e}")
 
         logger.info("Schema tables created successfully")
+
+        # Step 3: Apply additive runtime migrations for production upgrades.
+        await apply_runtime_migrations(conn)
 
 
 async def close_db() -> None:

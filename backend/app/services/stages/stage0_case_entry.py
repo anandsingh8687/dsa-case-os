@@ -3,11 +3,13 @@ import io
 import mimetypes
 import zipfile
 import re
+import asyncio
 from typing import List, Optional, BinaryIO, Tuple
 from pathlib import Path
 from uuid import UUID
 import logging
 
+import fitz  # PyMuPDF
 from fastapi import UploadFile, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
@@ -22,6 +24,7 @@ from app.services.file_storage import get_storage_backend, compute_file_hash
 from app.utils.case_id_generator import generate_case_id
 from app.services.document_processor import document_processor
 from app.services.stages.stage1_classifier import classify_document
+from app.services.stages.stage1_ocr import ocr_service
 from app.services.gst_api import get_gst_api_service, GSTAPIService
 from datetime import datetime as dt
 
@@ -36,6 +39,7 @@ MAX_CASE_UPLOAD_BYTES = settings.MAX_CASE_UPLOAD_MB * 1024 * 1024
 IGNORED_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 IGNORED_FOLDERS = {"__MACOSX", ".git", ".svn"}
 GSTIN_FILENAME_REGEX = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]\b", re.IGNORECASE)
+GST_FILENAME_HINTS = ("gst", "gstr", "certificate", "returns")
 
 
 class CaseEntryService:
@@ -75,6 +79,8 @@ class CaseEntryService:
                 "user_id": current_user.id,
                 "status": CaseStatus.CREATED.value,
                 "borrower_name": case_data.borrower_name if case_data else None,
+                "gstin": case_data.gstin if case_data else None,
+                "business_address": case_data.business_address if case_data else None,
                 "entity_type": case_data.entity_type.value if case_data and case_data.entity_type else None,
                 "program_type": case_data.program_type.value if case_data and case_data.program_type else None,
                 "industry_type": case_data.industry_type if case_data else None,
@@ -170,8 +176,29 @@ class CaseEntryService:
                         uploaded_documents.append(document)
 
             # Update case status to PROCESSING
+            if uploaded_documents:
+                await self._run_fast_gst_prefill(case, uploaded_documents)
+
             case.status = CaseStatus.PROCESSING.value
             await self.db.commit()
+
+            if uploaded_documents and settings.RQ_ASYNC_ENABLED:
+                try:
+                    from app.services.rq_queue import enqueue_case_pipeline_job
+
+                    pipeline_job_id = enqueue_case_pipeline_job(case.case_id)
+                    logger.info(
+                        "Queued full case pipeline for %s (job=%s)",
+                        case.case_id,
+                        pipeline_job_id,
+                    )
+                except Exception as queue_error:  # noqa: BLE001
+                    logger.error(
+                        "Failed to enqueue full pipeline for case %s: %s",
+                        case.case_id,
+                        queue_error,
+                        exc_info=True,
+                    )
 
             # Update completeness score if program type is set
             if case.program_type:
@@ -505,6 +532,81 @@ class CaseEntryService:
             logger.error(f"Failed to process ZIP file: {e}")
             raise
 
+    async def _run_fast_gst_prefill(self, case: Case, uploaded_documents: List[Document]) -> None:
+        """
+        Fast prefill path:
+        1) detect GST candidates by filename/classifier
+        2) extract GSTIN quickly (filename + first-page text + OCR fallback)
+        3) fetch GST API and prefill case before response returns
+        """
+        if case.gstin and case.gst_data:
+            return
+
+        candidate_docs = [doc for doc in uploaded_documents if self._is_gst_candidate(doc)]
+        if not candidate_docs:
+            return
+
+        for doc in candidate_docs[:4]:
+            gstin = self._extract_gstin_from_filename(doc.original_filename)
+            if not gstin:
+                gstin = await self._extract_gstin_fast_from_document(doc)
+            if not gstin:
+                continue
+
+            await self._fetch_and_apply_gst_data(doc, gstin)
+            if case.gst_data:
+                logger.info(
+                    "Fast GST prefill succeeded for case %s using %s",
+                    case.case_id,
+                    doc.original_filename,
+                )
+                return
+
+    def _is_gst_candidate(self, document: Document) -> bool:
+        filename = (document.original_filename or "").lower()
+        if any(token in filename for token in GST_FILENAME_HINTS):
+            return True
+        doc_type = (document.doc_type or "").lower()
+        return doc_type in {"gst_certificate", "gst_returns"}
+
+    async def _extract_gstin_fast_from_document(self, document: Document) -> Optional[str]:
+        if not document.storage_key:
+            return None
+
+        file_path = self.storage.get_file_path(document.storage_key)
+        if not file_path or not file_path.exists():
+            return None
+
+        try:
+            if str(file_path).lower().endswith(".pdf"):
+                first_page_text = await asyncio.to_thread(self._extract_first_pages_text, file_path, 2)
+                gstin = GSTAPIService.extract_gstin_from_text(first_page_text or "")
+                if gstin:
+                    return gstin
+
+            # OCR fallback only for likely GST files to keep this fast.
+            ocr_result = await asyncio.wait_for(
+                ocr_service.extract_text(str(file_path), document.mime_type or ""),
+                timeout=8.0,
+            )
+            return GSTAPIService.extract_gstin_from_text((ocr_result.text or "")[:12000])
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "Fast GST extraction skipped for %s: %s",
+                document.original_filename,
+                exc,
+            )
+            return None
+
+    @staticmethod
+    def _extract_first_pages_text(file_path: Path, max_pages: int = 2) -> str:
+        doc = fitz.open(file_path)
+        try:
+            pages = min(len(doc), max_pages)
+            return "\n".join(doc[page_index].get_text("text") for page_index in range(pages))
+        finally:
+            doc.close()
+
     async def _enqueue_processing_job(self, case_uuid: UUID, document_uuid: UUID) -> None:
         """Create a persistent OCR/classification job for worker queue."""
         job_kwargs = {
@@ -720,6 +822,7 @@ class CaseEntryService:
             pincode=case.pincode,
             loan_amount_requested=case.loan_amount_requested,
             gstin=case.gstin,
+            business_address=case.business_address,
             created_at=case.created_at,
             updated_at=case.updated_at
         )
@@ -812,8 +915,15 @@ class CaseEntryService:
             case.gst_fetched_at = dt.utcnow()
 
             # Auto-populate fields from GST data (GST data overrides manual entry per user preference)
-            if gst_data.get("borrower_name"):
-                case.borrower_name = gst_data["borrower_name"]
+            gst_name = (
+                gst_data.get("borrower_name")
+                or gst_data.get("tradename")
+                or gst_data.get("trade_name")
+                or gst_data.get("name")
+                or gst_data.get("legal_name")
+            )
+            if gst_name:
+                case.borrower_name = str(gst_name).strip()
 
             if gst_data.get("entity_type"):
                 case.entity_type = gst_data["entity_type"]
@@ -826,6 +936,24 @@ class CaseEntryService:
 
             if gst_data.get("industry_type") and not case.industry_type:
                 case.industry_type = gst_data["industry_type"]
+
+            gst_address = (
+                gst_data.get("address")
+                or gst_data.get("principal_address")
+                or gst_data.get("principal_place")
+                or gst_data.get("pradr_address")
+            )
+            if not gst_address:
+                raw_response = gst_data.get("raw_response")
+                pradr = raw_response.get("pradr") if isinstance(raw_response, dict) else None
+                if isinstance(pradr, dict):
+                    gst_address = " ".join(
+                        str(pradr.get(key)).strip()
+                        for key in ("bno", "bnm", "st", "loc", "dst", "stcd", "pncd")
+                        if pradr.get(key)
+                    ).strip()
+            if gst_address:
+                case.business_address = str(gst_address)
 
             await self.db.flush()
 

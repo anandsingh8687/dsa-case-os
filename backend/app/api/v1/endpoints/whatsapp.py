@@ -4,7 +4,8 @@ WhatsApp API Endpoints
 Per-case WhatsApp chat integration.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Body
+from fastapi import APIRouter, HTTPException, Depends, Body, Query, Request
+from fastapi.responses import PlainTextResponse
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 import logging
@@ -16,6 +17,8 @@ from app.services.whatsapp_service import (
     save_whatsapp_message,
     get_case_chat_history
 )
+from app.services.whatsapp_cloud_service import whatsapp_cloud_service
+from app.core.config import settings
 from app.core.deps import CurrentUser
 
 logger = logging.getLogger(__name__)
@@ -130,12 +133,13 @@ class ChatHistoryResponse(BaseModel):
 @router.get("/health")
 async def whatsapp_health_check():
     """Check if WhatsApp service is running."""
-    is_healthy = await whatsapp_client.health_check()
-
-    if is_healthy:
-        return {"status": "ok", "whatsapp_service": "running"}
-    else:
-        raise HTTPException(status_code=503, detail="WhatsApp service unavailable")
+    legacy_healthy = await whatsapp_client.health_check()
+    return {
+        "status": "ok",
+        "legacy_service_running": legacy_healthy,
+        "cloud_api_configured": whatsapp_cloud_service.configured,
+        "primary_number": "8130781881",
+    }
 
 
 @router.post("/generate-qr", response_model=GenerateQRResponse)
@@ -266,6 +270,54 @@ async def send_whatsapp_message(
         )
 
 
+@router.post("/cloud/send-message", response_model=SendMessageResponse)
+async def send_whatsapp_cloud_message(
+    request: SendMessageRequest,
+    current_user: CurrentUser
+):
+    """Send message using Meta WhatsApp Cloud API (primary number 8130781881)."""
+    if not whatsapp_cloud_service.configured:
+        raise HTTPException(status_code=503, detail="WhatsApp Cloud API is not configured")
+
+    from app.db.database import get_db_session
+
+    async with get_db_session() as db:
+        row = await db.fetchrow(
+            """
+            SELECT case_id
+            FROM cases
+            WHERE case_id = $1
+              AND (organization_id = $2 OR user_id = $3)
+            """,
+            request.case_id,
+            current_user.organization_id,
+            current_user.id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Case not found")
+
+    result = await whatsapp_cloud_service.send_text_message(request.to, request.message)
+    if not result.get("success"):
+        return SendMessageResponse(success=False, error=result.get("error", "Failed to send message"))
+
+    message_id = (((result.get("data") or {}).get("messages") or [{}])[0]).get("id")
+    await save_whatsapp_message(
+        case_id_str=request.case_id,
+        message_id=message_id,
+        from_number=settings.WHATSAPP_CLOUD_BUSINESS_NUMBER,
+        to_number=request.to,
+        message_body=request.message,
+        direction='outbound',
+        message_type='text',
+        status='sent'
+    )
+
+    return SendMessageResponse(
+        success=True,
+        message_id=message_id,
+    )
+
+
 @router.get("/chat-history/{case_id}", response_model=ChatHistoryResponse)
 async def get_chat_history(
     case_id: str,
@@ -330,18 +382,24 @@ async def disconnect_whatsapp(
 # ============================================================
 
 @router.post("/webhook")
-async def whatsapp_webhook(webhook: WhatsAppWebhook):
+async def whatsapp_webhook(request: Request):
     """
     Webhook endpoint for WhatsApp service to send events.
 
     This is called by the Node.js WhatsApp service when messages are received.
     """
-    logger.info(f"Webhook received: {webhook.event}")
+    payload = await request.json()
 
+    # Meta WhatsApp Cloud API webhook shape.
+    if payload.get("object") == "whatsapp_business_account":
+        result = await whatsapp_cloud_service.handle_meta_webhook_payload(payload)
+        return {"status": "received", "mode": "cloud", **result}
+
+    # Legacy node webhook compatibility.
+    webhook = WhatsAppWebhook(**payload)
+    logger.info(f"Legacy webhook received: {webhook.event}")
     if webhook.event == 'message':
         data = webhook.data
-
-        # Save incoming message to database
         await save_whatsapp_message(
             case_id_str=data.get('caseId'),
             message_id=data.get('messageId'),
@@ -352,7 +410,18 @@ async def whatsapp_webhook(webhook: WhatsAppWebhook):
             message_type=data.get('type', 'text'),
             status='received'
         )
-
         logger.info(f"Incoming WhatsApp message saved for case {data.get('caseId')}")
+    return {"status": "received", "mode": "legacy"}
 
-    return {"status": "received"}
+
+@router.get("/webhook")
+async def whatsapp_cloud_webhook_verify(
+    hub_mode: str = Query(default="", alias="hub.mode"),
+    hub_verify_token: str = Query(default="", alias="hub.verify_token"),
+    hub_challenge: str = Query(default="", alias="hub.challenge"),
+):
+    """Meta Cloud API webhook verification endpoint."""
+    ok, response = await whatsapp_cloud_service.verify_webhook(hub_mode, hub_verify_token, hub_challenge)
+    if not ok:
+        raise HTTPException(status_code=403, detail=response)
+    return PlainTextResponse(response)

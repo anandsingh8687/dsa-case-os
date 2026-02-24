@@ -20,6 +20,10 @@ from . import (
     commission,
     leads,
     submissions,
+    organizations,
+    rag,
+    billing,
+    verify,
 )
 
 __all__ = [
@@ -42,4 +46,8 @@ __all__ = [
     "commission",
     "leads",
     "submissions",
+    "organizations",
+    "rag",
+    "billing",
+    "verify",
 ]

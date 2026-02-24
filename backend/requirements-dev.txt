@@ -15,4 +15,4 @@ mypy==1.8.0
 isort==5.13.2
 
 # Database testing
-alembic==1.13.1
+alembic==1.13.2

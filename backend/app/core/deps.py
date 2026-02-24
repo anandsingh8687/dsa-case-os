@@ -1,6 +1,6 @@
 """FastAPI dependencies for authentication and database access."""
 
-from typing import Annotated
+from typing import Annotated, Iterable
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
@@ -97,7 +97,7 @@ async def require_admin(current_user: CurrentUser) -> User:
     Raises:
         HTTPException 403: If current user is not an admin.
     """
-    if current_user.role != "admin":
+    if current_user.role not in {"admin", "super_admin"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
@@ -106,6 +106,55 @@ async def require_admin(current_user: CurrentUser) -> User:
 
 
 CurrentAdmin = Annotated[User, Depends(require_admin)]
+
+
+def require_roles(*roles: str):
+    """Dependency factory to enforce RBAC role checks."""
+    allowed = {r for r in roles if r}
+
+    async def _checker(current_user: CurrentUser) -> User:
+        if allowed and current_user.role not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Requires one of roles: {', '.join(sorted(allowed))}",
+            )
+        return current_user
+
+    return _checker
+
+
+CurrentSuperAdmin = Annotated[User, Depends(require_roles("super_admin"))]
+CurrentDSAOwnerOrSuperAdmin = Annotated[User, Depends(require_roles("dsa_owner", "super_admin"))]
+
+
+def enforce_org_scope_sql(
+    base_query: str,
+    current_user: User,
+    *,
+    org_column: str = "organization_id",
+    user_column: str | None = None,
+) -> tuple[str, list]:
+    """Utility for raw SQL handlers to apply org/user scope consistently."""
+    params: list = []
+    query = base_query
+
+    if current_user.role == "super_admin":
+        return query, params
+
+    if current_user.organization_id:
+        clause = f"{org_column} = ${len(params) + 1}"
+        params.append(current_user.organization_id)
+    elif user_column:
+        clause = f"{user_column} = ${len(params) + 1}"
+        params.append(current_user.id)
+    else:
+        clause = "1=0"
+
+    if " where " in query.lower():
+        query = f"{query} AND {clause}"
+    else:
+        query = f"{query} WHERE {clause}"
+    return query, params
 
 
 async def get_current_user_optional(

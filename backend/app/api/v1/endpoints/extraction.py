@@ -38,6 +38,10 @@ MAX_BANK_STATEMENT_FILE_BYTES = 8 * 1024 * 1024  # 8 MB safety guard for extract
 def _as_float(value):
     if value is None or value == "":
         return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_likely_bank_statement_document(document: Document) -> bool:
@@ -53,10 +57,6 @@ def _is_likely_bank_statement_document(document: Document) -> bool:
         return True
 
     return False
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _scoped_case_query(case_id: str, current_user):
@@ -458,10 +458,17 @@ async def trigger_extraction(
         # Assemble feature vector
         feature_started = time.perf_counter()
         try:
+            # Assemble from all persisted extracted fields for this case
+            # so reruns and partial document retries do not drop prior metrics.
+            persisted_fields = await assembler.get_extracted_fields(
+                db=db,
+                case_id=case_id,
+            )
+
             feature_vector = await assembler.assemble_features(
                 db=db,
                 case_id=case_id,
-                extracted_fields=all_extracted_fields
+                extracted_fields=persisted_fields
             )
 
             # Save feature vector

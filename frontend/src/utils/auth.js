@@ -14,7 +14,7 @@ export const isAuthenticated = () => !!getToken();
 
 export const isAdmin = () => {
   const user = getUser();
-  return user?.role === 'admin';
+  return user?.role === 'admin' || user?.role === 'super_admin';
 };
 
 export const getUser = () => {

@@ -17,22 +17,21 @@ import {
   getCase,
   getCaseDocuments,
   getCaseDocumentPreview,
-  getCaseDocumentsArchive,
+  createCaseDocumentsShareLink,
   updateCase,
   uploadDocuments,
   getCaseStatus,
+  triggerCasePipeline,
   getDocumentChecklist,
   getExtractedFields,
   getFeatureVector,
   getEligibilityResults,
   getEligibilityExplanation,
-  runExtraction,
   runScoring,
   generateReport,
   getReportPdf,
   getCaseReport,
   getWhatsAppSummary,
-  getNarrativeComprehensiveReport,
 } from '../api/services';
 import { Card, Button, Badge, Loading, ProgressBar, Modal } from '../components/ui';
 import { formatPercentage, formatCurrency, formatDate } from '../utils/format';
@@ -321,6 +320,7 @@ const CaseDetail = () => {
   const [documentPreview, setDocumentPreview] = useState(null);
   const [pipelineMetrics, setPipelineMetrics] = useState(null);
   const [pipelineQueueStatus, setPipelineQueueStatus] = useState(null);
+  const [shareLinkInfo, setShareLinkInfo] = useState(null);
 
   const { data: caseData, isLoading: caseLoading } = useQuery({
     queryKey: ['case', caseId],
@@ -369,6 +369,7 @@ const CaseDetail = () => {
     queryFn: () => getCaseReport(caseId),
     enabled: activeTab === 'report' && !!caseId,
     retry: 1,
+    refetchInterval: activeTab === 'report' ? 10000 : false,
   });
 
   const { data: whatsappSummaryData } = useQuery({
@@ -376,13 +377,7 @@ const CaseDetail = () => {
     queryFn: () => getWhatsAppSummary(caseId),
     enabled: activeTab === 'report' && !!caseId,
     retry: 1,
-  });
-
-  const { data: comprehensiveNarrativeData } = useQuery({
-    queryKey: ['report-narrative-comprehensive', caseId],
-    queryFn: () => getNarrativeComprehensiveReport(caseId),
-    enabled: activeTab === 'report' && !!caseId,
-    retry: 1,
+    refetchInterval: activeTab === 'report' ? 10000 : false,
   });
 
   const runScoringMutation = useMutation({
@@ -404,7 +399,6 @@ const CaseDetail = () => {
       queryClient.invalidateQueries({ queryKey: ['case', caseId] });
       queryClient.invalidateQueries({ queryKey: ['case-report', caseId] });
       queryClient.invalidateQueries({ queryKey: ['report-whatsapp', caseId] });
-      queryClient.invalidateQueries({ queryKey: ['report-narrative-comprehensive', caseId] });
     },
     onError: (error) => {
       toast.error(error.response?.data?.detail || 'Report generation failed');
@@ -428,23 +422,13 @@ const CaseDetail = () => {
     },
   });
 
-  const downloadCaseArchiveMutation = useMutation({
-    mutationFn: () => getCaseDocumentsArchive(caseId),
+  const createShareLinkMutation = useMutation({
+    mutationFn: (payload) => createCaseDocumentsShareLink(caseId, payload),
     onSuccess: (response) => {
-      const blob = new Blob([response.data], { type: 'application/zip' });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `${caseId}_documents.zip`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-      toast.success('Case documents ZIP downloaded');
+      setShareLinkInfo(response?.data || null);
     },
-    onError: async (error) => {
-      const message = await extractBlobErrorMessage(error, 'Failed to download document ZIP');
-      toast.error(message);
+    onError: (error) => {
+      toast.error(error?.response?.data?.detail || 'Failed to generate secure document link');
     },
   });
 
@@ -492,7 +476,6 @@ const CaseDetail = () => {
   const eligibilityExplain = eligibilityExplainData?.data || null;
   const caseReport = caseReportData?.data || null;
   const whatsappSummary = typeof whatsappSummaryData?.data === 'string' ? whatsappSummaryData.data : '';
-  const comprehensiveNarrative = comprehensiveNarrativeData?.data || null;
   const allEligibilityResults = Array.isArray(eligibility?.results)
     ? eligibility.results
     : [];
@@ -632,6 +615,57 @@ const CaseDetail = () => {
     ];
     return rows.filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '');
   }, [extractedFieldMap]);
+  const gstData = caseInfo?.gst_data && typeof caseInfo.gst_data === 'object' ? caseInfo.gst_data : {};
+  const gstRawResponse = gstData?.raw_response && typeof gstData.raw_response === 'object'
+    ? gstData.raw_response
+    : {};
+  const gstStatus = gstData?.status || gstRawResponse?.sts || 'N/A';
+  const gstTurnover = gstData?.annual_turnover || gstRawResponse?.aggr_turn_over || null;
+  const gstFilingHistory = useMemo(() => {
+    const direct = Array.isArray(gstData?.filing_history) ? gstData.filing_history : [];
+    if (direct.length > 0) return direct.slice(0, 5);
+    const returns = gstRawResponse?.returns;
+    if (Array.isArray(returns)) return returns.slice(0, 5);
+    return [];
+  }, [gstData?.filing_history, gstRawResponse?.returns]);
+  const totalOutstandingValue = toFiniteNumber(
+    extractedFieldMap.get('total_current_outstanding')
+      || extractedFieldMap.get('cibil_total_current_outstanding')
+  );
+  const dpdHistory = extractedFieldMap.get('dpd_history') || extractedFieldMap.get('cibil_dpd_history') || null;
+  const scoreTrend = extractedFieldMap.get('score_trend') || extractedFieldMap.get('cibil_score_trend') || null;
+  const activeLoanDetails = extractedFieldMap.get('active_loan_details') || extractedFieldMap.get('cibil_active_loan_details') || null;
+  const creditStorySummary = useMemo(() => {
+    const pieces = [];
+    if (features?.cibil_score) {
+      if (features.cibil_score >= 750) {
+        pieces.push('Excellent score band with low default probability.');
+      } else if (features.cibil_score >= 680) {
+        pieces.push('Healthy score band, generally acceptable to most BL lenders.');
+      } else {
+        pieces.push('Sub-prime score band; file quality and banking profile become critical.');
+      }
+    }
+    if ((features?.overdue_count || 0) > 0) {
+      pieces.push(`${features.overdue_count} overdue account(s) detected and needs justification.`);
+    } else {
+      pieces.push('No overdue accounts detected in the parsed bureau summary.');
+    }
+    if ((features?.enquiry_count_6m || 0) > 4) {
+      pieces.push('High recent enquiry velocity may impact approval confidence.');
+    } else if (features?.enquiry_count_6m !== null && features?.enquiry_count_6m !== undefined) {
+      pieces.push('Recent enquiry velocity is within acceptable range.');
+    }
+    if (totalOutstandingValue) {
+      pieces.push(`Total current outstanding stands at ${formatCurrency(totalOutstandingValue)}.`);
+    }
+    return pieces.join(' ');
+  }, [
+    features?.cibil_score,
+    features?.overdue_count,
+    features?.enquiry_count_6m,
+    totalOutstandingValue,
+  ]);
   const selectedEmailLender = allEligibilityResults.find((item) => (
     normalizeToken(item.lender_name) === normalizeToken(lenderNameInput)
       && normalizeToken(item.product_name) === normalizeToken(productNameInput)
@@ -655,94 +689,129 @@ const CaseDetail = () => {
   const firstMatchTicket = matchingEligibilityResults[0]?.expected_ticket_max;
 
   const emiLoanAmountRupees = lakhToRupees(emiLoanAmountLakhs);
+  const waitForCasePipelineCompletion = async (targetCaseId, opts = {}) => {
+    const maxAttempts = Number.isFinite(opts.maxAttempts) ? opts.maxAttempts : 360; // ~18 minutes
+    const pollIntervalMs = Number.isFinite(opts.pollIntervalMs) ? opts.pollIntervalMs : 3000;
+    let latestStatus = null;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await getCaseStatus(targetCaseId);
+        latestStatus = response?.data;
+        const jobs = latestStatus?.document_jobs || null;
+        if (typeof opts.onTick === 'function') {
+          opts.onTick(jobs);
+        }
+
+        const caseStatus = String(latestStatus?.status || '').toLowerCase();
+        if (caseStatus === 'report_generated' || caseStatus === 'submitted') {
+          return latestStatus;
+        }
+        if (caseStatus === 'failed') {
+          throw new Error('Pipeline failed in background processing');
+        }
+      } catch (error) {
+        // Keep polling across intermittent network/redeploy blips.
+        if (attempt === maxAttempts - 1) {
+          throw error;
+        }
+      }
+      await waitMs(pollIntervalMs);
+    }
+
+    throw new Error('Pipeline is taking longer than expected. Please check status again in a minute.');
+  };
+
   const runFullPipelineMutation = useMutation({
     mutationFn: async () => {
-      const timings = {};
-      const startedAt = performance.now();
-      let stage = 'queue_wait';
-      let stageStartedAt = performance.now();
       setPipelineQueueStatus(null);
-      const runStageWithRetry = async (fn) => {
-        try {
-          return await fn();
-        } catch (error) {
-          if (!isRetryablePipelineError(error)) {
-            throw error;
+      const startedAt = performance.now();
+      const triggerWithRetry = async (payload = {}, attempts = 3) => {
+        let lastError = null;
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+          try {
+            return await triggerCasePipeline(caseId, payload);
+          } catch (error) {
+            lastError = error;
+            if (attempt === attempts || !isRetryablePipelineError(error)) {
+              throw error;
+            }
+            await waitMs(1000 * attempt);
           }
-          await waitMs(1200);
-          return fn();
         }
+        throw lastError || new Error('Unable to trigger pipeline');
       };
+
+      let triggerResponse;
       try {
-        const queueState = await waitForDocumentQueue(caseId, {
-          maxAttempts: 240, // ~8 minutes for larger uploads
-          onTick: (jobs) => setPipelineQueueStatus(jobs),
-        });
-        timings.queue_wait = Number((performance.now() - stageStartedAt).toFixed(0));
-
-        const queueJobs = queueState?.document_jobs;
-        if (queueJobs?.in_progress) {
-          const pending = Number(queueJobs.queued || 0) + Number(queueJobs.processing || 0);
-          throw new Error(
-            `Document processing is still running (${pending} pending). Please wait and retry.`
-          );
-        }
-
-        const failedJobs = Number(queueJobs?.failed || 0);
-        if (failedJobs > 0) {
-          toast(`Document queue completed with ${failedJobs} failed file(s). Results may be partial.`, {
-            icon: '⚠️',
-          });
-        }
-
-        stage = 'extraction';
-        stageStartedAt = performance.now();
-        const extractionResponse = await runStageWithRetry(() => runExtraction(caseId));
-        timings.extraction = Number((performance.now() - stageStartedAt).toFixed(0));
-        timings.extraction_backend = extractionResponse?.data?.timing_ms || null;
-
-        stage = 'scoring';
-        stageStartedAt = performance.now();
-        await runStageWithRetry(() => runScoring(caseId));
-        timings.scoring = Number((performance.now() - stageStartedAt).toFixed(0));
-
-        stage = 'report';
-        stageStartedAt = performance.now();
-        const reportResponse = await runStageWithRetry(() => generateReport(caseId));
-        timings.report = Number((performance.now() - stageStartedAt).toFixed(0));
-        timings.report_backend = reportResponse?.data?.timing_ms || null;
-
-        timings.total = Number((performance.now() - startedAt).toFixed(0));
-        return timings;
+        triggerResponse = await triggerWithRetry({}, 3);
       } catch (error) {
-        error.pipelineStage = stage;
-        error.pipelineTimings = {
-          ...timings,
-          [stage]: Number((performance.now() - stageStartedAt).toFixed(0)),
-          total: Number((performance.now() - startedAt).toFixed(0)),
-        };
+        // If trigger call itself fails due transient network/proxy issues,
+        // still check whether pipeline is already running and continue polling.
+        const statusSnapshot = await getCaseStatus(caseId).catch(() => null);
+        const statusValue = String(statusSnapshot?.data?.status || '').toLowerCase();
+        const queueInProgress = Boolean(statusSnapshot?.data?.document_jobs?.in_progress);
+        if (statusValue === 'processing' || queueInProgress) {
+          const finalState = await waitForCasePipelineCompletion(caseId, {
+            onTick: (jobs) => setPipelineQueueStatus(jobs),
+          });
+          return {
+            total: Number((performance.now() - startedAt).toFixed(0)),
+            mode: 'async_queue',
+            final_status: finalState?.status,
+            queue_snapshot: finalState?.document_jobs || null,
+          };
+        }
         throw error;
       }
+
+      let triggerStatus = triggerResponse?.data?.status;
+
+      if (triggerStatus === 'already_complete') {
+        return {
+          total: Number((performance.now() - startedAt).toFixed(0)),
+          mode: 'already_complete',
+        };
+      }
+
+      if (triggerStatus === 'waiting_for_documents') {
+        await waitForDocumentQueue(caseId, {
+          maxAttempts: 240,
+          onTick: (jobs) => setPipelineQueueStatus(jobs),
+        });
+        triggerResponse = await triggerWithRetry({ force: true }, 3);
+        triggerStatus = triggerResponse?.data?.status;
+      }
+
+      const finalState = await waitForCasePipelineCompletion(caseId, {
+        onTick: (jobs) => setPipelineQueueStatus(jobs),
+      });
+
+      return {
+        total: Number((performance.now() - startedAt).toFixed(0)),
+        mode: 'async_queue',
+        final_status: finalState?.status,
+        queue_snapshot: finalState?.document_jobs || null,
+      };
     },
-    onSuccess: (timings) => {
-      setPipelineMetrics(timings);
+    onSuccess: (result) => {
+      setPipelineMetrics(result);
       setPipelineQueueStatus(null);
       toast.success(
-        `Pipeline completed: extraction ${timings.extraction}ms, scoring ${timings.scoring}ms, report ${timings.report}ms`
+        result?.mode === 'already_complete'
+          ? 'Report is already generated for this case.'
+          : `Pipeline completed in ${result?.total || 0}ms`
       );
       queryClient.invalidateQueries({ queryKey: ['case', caseId] });
       queryClient.invalidateQueries({ queryKey: ['case-documents', caseId] });
       queryClient.invalidateQueries({ queryKey: ['features', caseId] });
       queryClient.invalidateQueries({ queryKey: ['eligibility', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['case-report', caseId] });
+      queryClient.invalidateQueries({ queryKey: ['report-whatsapp', caseId] });
     },
     onError: (error) => {
-      const stage = error?.pipelineStage || 'pipeline';
       const detail = extractApiErrorMessage(error, 'Full processing failed');
-      const elapsed = error?.pipelineTimings?.[stage];
-      setPipelineMetrics(error?.pipelineTimings || null);
-      toast.error(
-        `${stage.toUpperCase()} failed${Number.isFinite(elapsed) ? ` after ${elapsed}ms` : ''}: ${detail}`
-      );
+      toast.error(`Pipeline failed: ${detail}`);
     },
     onSettled: () => {
       setPipelineQueueStatus(null);
@@ -790,36 +859,49 @@ const CaseDetail = () => {
 
   const reuploadDocumentsMutation = useMutation({
     mutationFn: async (filesToUpload) => {
-      const runStageWithRetry = async (fn) => {
-        try {
-          return await fn();
-        } catch (error) {
-          if (!isRetryablePipelineError(error)) {
-            throw error;
-          }
-          await waitMs(1200);
-          return fn();
-        }
-      };
-
       const formData = new FormData();
       filesToUpload.forEach((file) => {
         formData.append('files', file);
       });
-      await uploadDocuments(caseId, formData);
-      const queueState = await waitForDocumentQueue(caseId);
-      const failedJobs = Number(queueState?.document_jobs?.failed || 0);
+      await uploadDocuments(caseId, formData, { timeout: 600000 });
+
+      let triggerResponse;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          triggerResponse = await triggerCasePipeline(caseId, { force: true });
+          break;
+        } catch (error) {
+          if (attempt === 3 || !isRetryablePipelineError(error)) {
+            throw error;
+          }
+          await waitMs(1200 * attempt);
+        }
+      }
+
+      if (triggerResponse?.data?.status === 'waiting_for_documents') {
+        await waitForDocumentQueue(caseId, {
+          maxAttempts: 240,
+          onTick: (jobs) => setPipelineQueueStatus(jobs),
+        });
+        await triggerCasePipeline(caseId, { force: true });
+      }
+
+      const finalState = await waitForCasePipelineCompletion(caseId, {
+        maxAttempts: 420,
+        pollIntervalMs: 3000,
+        onTick: (jobs) => setPipelineQueueStatus(jobs),
+      });
+
+      const failedJobs = Number(finalState?.document_jobs?.failed || 0);
       if (failedJobs > 0) {
-        toast(`Processing finished with ${failedJobs} failed file(s). You can re-upload failed files again.`, {
+        toast(`Re-processing completed with ${failedJobs} failed file(s). Re-upload unreadable files for best output.`, {
           icon: '⚠️',
         });
       }
-      await runStageWithRetry(() => runExtraction(caseId));
-      await runStageWithRetry(() => runScoring(caseId));
-      await runStageWithRetry(() => generateReport(caseId));
     },
     onSuccess: () => {
-      toast.success('Documents uploaded and pipeline re-run completed.');
+      setPipelineQueueStatus(null);
+      toast.success('Documents uploaded. Background pipeline completed.');
       setReuploadFiles([]);
       queryClient.invalidateQueries({ queryKey: ['case', caseId] });
       queryClient.invalidateQueries({ queryKey: ['case-documents', caseId] });
@@ -828,10 +910,11 @@ const CaseDetail = () => {
       queryClient.invalidateQueries({ queryKey: ['eligibility', caseId] });
       queryClient.invalidateQueries({ queryKey: ['case-report', caseId] });
       queryClient.invalidateQueries({ queryKey: ['report-whatsapp', caseId] });
-      queryClient.invalidateQueries({ queryKey: ['report-narrative-comprehensive', caseId] });
     },
     onError: (error) => {
-      toast.error(error.response?.data?.detail || 'Failed to upload and reprocess documents');
+      setPipelineQueueStatus(null);
+      const detail = extractApiErrorMessage(error, 'Failed to upload and reprocess documents');
+      toast.error(detail);
     },
   });
 
@@ -885,7 +968,31 @@ const CaseDetail = () => {
     { id: 'report', label: 'Report', icon: FileDown },
   ];
 
-  const openMailtoDraft = async (prepareZipFirst = false) => {
+  const ensureShareLink = async () => {
+    const currentUrl = shareLinkInfo?.download_url;
+    const currentExpiry = shareLinkInfo?.expires_at ? Date.parse(shareLinkInfo.expires_at) : null;
+    const hasValidCurrent =
+      typeof currentUrl === 'string'
+      && currentUrl.length > 0
+      && Number.isFinite(currentExpiry)
+      && currentExpiry > Date.now() + 60 * 1000;
+
+    if (hasValidCurrent) {
+      return currentUrl;
+    }
+
+    const response = await createShareLinkMutation.mutateAsync({
+      expires_in_hours: 72,
+      max_downloads: 25,
+    });
+    const generatedUrl = response?.data?.download_url;
+    if (!generatedUrl) {
+      throw new Error('Share link missing from API response');
+    }
+    return generatedUrl;
+  };
+
+  const openMailtoDraft = async () => {
     const lenderName = lenderNameInput.trim();
     const productName = productNameInput.trim() || selectedEmailLender?.product_name || 'Business Loan';
 
@@ -898,12 +1005,12 @@ const CaseDetail = () => {
       return;
     }
 
-    if (prepareZipFirst) {
-      try {
-        await downloadCaseArchiveMutation.mutateAsync();
-      } catch {
-        return;
-      }
+    let shareUrl = '';
+    try {
+      shareUrl = await ensureShareLink();
+    } catch (error) {
+      toast.error('Unable to generate secure document link');
+      return;
     }
 
     const loggedInUser = getUser();
@@ -935,7 +1042,7 @@ const CaseDetail = () => {
       '',
       'Case Snapshot:',
       `- Case ID: ${caseId}`,
-      `- Borrower: ${caseInfo?.borrower_name || 'N/A'}`,
+      `- Company: ${caseInfo?.borrower_name || 'N/A'}`,
       `- Entity: ${caseInfo?.entity_type || 'N/A'}`,
       `- CIBIL: ${features?.cibil_score || caseInfo?.cibil_score_manual || 'N/A'}`,
       `- Business Vintage: ${features?.business_vintage_years || caseInfo?.business_vintage_years || 'N/A'} years`,
@@ -947,7 +1054,8 @@ const CaseDetail = () => {
       strengths,
       '',
       `Document Package: ${documentPackageLine}`,
-      'Please find the document ZIP attached.',
+      `Secure Document Link: ${shareUrl}`,
+      'Please review using this secure link (temporary, controlled access).',
       '',
       'Please review and share eligibility feedback with next steps.',
       '',
@@ -970,7 +1078,7 @@ const CaseDetail = () => {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">
-              {caseInfo?.borrower_name || 'Unnamed Case'}
+              {caseInfo?.borrower_name || 'Unnamed Company'}
             </h1>
             <p className="text-sm text-gray-600 mt-1">{caseId}</p>
           </div>
@@ -1202,7 +1310,7 @@ const CaseDetail = () => {
                 Loan Checklist
               </h3>
               <p className="text-xs text-gray-600 mb-3">
-                Guidance checklist to reduce back-and-forth with borrowers and improve first-pass lender submissions.
+                Guidance checklist to reduce back-and-forth with companies and improve first-pass lender submissions.
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                 <div className="rounded-md border border-gray-200 bg-white p-3">
@@ -1240,12 +1348,12 @@ const CaseDetail = () => {
                 <Play className="w-4 h-4" />
                 {runFullPipelineMutation.isPending
                   ? (pipelineQueueStatus?.in_progress
-                    ? `Waiting for OCR Queue (${pipelineQueueStatus.completion_pct || 0}%)`
-                    : 'Processing...')
+                    ? `Analyzing Documents (${pipelineQueueStatus.completion_pct || 0}%)`
+                    : 'Running Background Pipeline...')
                   : 'Run Full Pipeline'}
               </Button>
               <p className="text-xs text-gray-500 mt-2">
-                Runs extraction, eligibility scoring, and report generation sequentially.
+                Triggers extraction, eligibility scoring, and report generation in background.
               </p>
               {runFullPipelineMutation.isPending && pipelineQueueStatus?.in_progress && (
                 <p className="text-xs text-blue-700 mt-1">
@@ -1253,17 +1361,9 @@ const CaseDetail = () => {
                   completed {pipelineQueueStatus.completed || 0}, failed {pipelineQueueStatus.failed || 0}
                 </p>
               )}
-              {pipelineMetrics && (
+              {pipelineMetrics?.total && (
                 <p className="text-xs text-blue-700 mt-2">
-                  Last run timing: extraction {pipelineMetrics.extraction || 0}ms, scoring {pipelineMetrics.scoring || 0}ms,
-                  report {pipelineMetrics.report || 0}ms, total {pipelineMetrics.total || 0}ms
-                </p>
-              )}
-              {pipelineMetrics?.extraction_backend && (
-                <p className="text-xs text-blue-700 mt-1">
-                  Extraction internals: doc parse {pipelineMetrics.extraction_backend.document_extraction || 0}ms,
-                  bank analysis {pipelineMetrics.extraction_backend.bank_analysis || 0}ms,
-                  feature assembly {pipelineMetrics.extraction_backend.feature_assembly || 0}ms
+                  Last background run completed in {pipelineMetrics.total}ms.
                 </p>
               )}
             </div>
@@ -1272,246 +1372,264 @@ const CaseDetail = () => {
       )}
 
       {activeTab === 'profile' && (
-        <Card>
-          <h2 className="text-xl font-semibold mb-6">Borrower Profile</h2>
-          {Object.keys(features).length === 0 ? (
-            <p className="text-gray-500 text-center py-8">
-              No features extracted yet. Upload documents and run extraction.
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              {/* IDENTITY Section */}
-              <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-primary border-b pb-2">Identity</h3>
-                <div className="space-y-3">
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Full Name</span>
-                    <span className="font-medium text-right">{features.full_name || 'N/A'}</span>
+        <div className="space-y-5">
+          <Card className="transition-all duration-300 hover:shadow-lg border border-slate-200">
+            <h2 className="text-xl font-semibold mb-4 text-slate-900">Identity Profile</h2>
+            {Object.keys(features).length === 0 ? (
+              <p className="text-gray-500 text-center py-6">
+                No features extracted yet. Upload documents and run extraction.
+              </p>
+            ) : (
+              <div className="space-y-3 text-sm">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                    <div className="text-slate-500 text-xs mb-1">Full Name</div>
+                    <div className="font-semibold text-slate-900">{features.full_name || 'N/A'}</div>
                   </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">PAN Number</span>
-                    <span className="font-medium text-right">{features.pan_number || 'N/A'}</span>
+                  <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                    <div className="text-slate-500 text-xs mb-1">PAN Number</div>
+                    <div className="font-semibold text-slate-900">{features.pan_number || 'N/A'}</div>
                   </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Aadhaar Number</span>
-                    <span className="font-medium text-right">
+                  <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                    <div className="text-slate-500 text-xs mb-1">Aadhaar Number</div>
+                    <div className="font-semibold text-slate-900">
                       {features.aadhaar_number ? `****${features.aadhaar_number.slice(-4)}` : 'N/A'}
-                    </span>
+                    </div>
                   </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Date of Birth</span>
-                    <span className="font-medium text-right">{features.dob || 'N/A'}</span>
+                  <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                    <div className="text-slate-500 text-xs mb-1">Date of Birth</div>
+                    <div className="font-semibold text-slate-900">{features.dob || 'N/A'}</div>
                   </div>
                 </div>
                 {additionalApplicants.length > 0 && (
-                  <div className="pt-3 mt-3 border-t border-gray-100 space-y-2">
-                    <h4 className="text-sm font-semibold text-gray-900">
+                  <div className="pt-2">
+                    <h4 className="text-sm font-semibold text-slate-900 mb-2">
                       Additional Applicant Details ({additionalApplicants.length})
                     </h4>
-                    {additionalApplicants.map((applicant, idx) => (
-                      <div key={`co-app-${idx}`} className="rounded-md border border-gray-200 p-3 bg-gray-50">
-                        <div className="text-xs font-semibold text-gray-700 mb-1">
-                          Co-applicant {idx + 1}
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                          <div>Full Name: <span className="font-medium">{applicant.full_name || 'N/A'}</span></div>
-                          <div>PAN: <span className="font-medium">{applicant.pan_number || 'N/A'}</span></div>
-                          <div>
-                            Aadhaar: <span className="font-medium">
-                              {applicant.aadhaar_number ? `****${applicant.aadhaar_number.slice(-4)}` : 'N/A'}
-                            </span>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {additionalApplicants.map((applicant, idx) => (
+                        <div key={`co-app-${idx}`} className="rounded-md border border-slate-200 p-3 bg-white">
+                          <div className="text-xs font-semibold text-slate-700 mb-2">Co-applicant {idx + 1}</div>
+                          <div className="space-y-1 text-sm">
+                            <div>Full Name: <span className="font-medium">{applicant.full_name || 'N/A'}</span></div>
+                            <div>PAN: <span className="font-medium">{applicant.pan_number || 'N/A'}</span></div>
+                            <div>Aadhaar: <span className="font-medium">{applicant.aadhaar_number ? `****${applicant.aadhaar_number.slice(-4)}` : 'N/A'}</span></div>
+                            <div>DOB: <span className="font-medium">{applicant.dob || 'N/A'}</span></div>
                           </div>
-                          <div>DOB: <span className="font-medium">{applicant.dob || 'N/A'}</span></div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* BUSINESS Section */}
-              <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-primary border-b pb-2">Business</h3>
-                <div className="space-y-3">
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Entity Type</span>
-                    <span className="font-medium text-right capitalize">{features.entity_type || caseInfo?.entity_type || 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Business Vintage</span>
-                    <span className="font-medium text-right">
-                      {features.business_vintage_years || caseInfo?.business_vintage_years
-                        ? `${features.business_vintage_years || caseInfo?.business_vintage_years} years`
-                        : 'N/A'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">GSTIN</span>
-                    <span className="font-medium text-right">{features.gstin || caseInfo?.gstin || 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Industry</span>
-                    <span className="font-medium text-right">{features.industry_type || caseInfo?.industry_type || 'N/A'}</span>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Pincode</span>
-                    <span className="font-medium text-right">{features.pincode || caseInfo?.pincode || 'N/A'}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* FINANCIAL Section */}
-              <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-primary border-b pb-2">Financial</h3>
-                <div className="space-y-3">
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Annual Turnover</span>
-                    <span className="font-medium text-right">
-                      {annualTurnoverLakhs ? `₹${Number(annualTurnoverLakhs).toLocaleString('en-IN')} L` : 'N/A'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Monthly Turnover</span>
-                    <div className="text-right">
-                      <span className="font-medium">
-                        {monthlyTurnoverAmount ? `₹${Number(monthlyTurnoverAmount).toLocaleString('en-IN')}` : 'N/A'}
-                      </span>
-                      {monthlyTurnoverAmount && (
-                        <span className="ml-2 text-xs text-blue-600">from bank</span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Avg Monthly Balance (in thousands)</span>
-                    <span className="font-medium text-right">
-                      {formatInThousands(avgMonthlyBalance)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Monthly Credits (Avg)</span>
-                    <span className="font-medium text-right">
-                      {monthlyCreditAvg ? `₹${Number(monthlyCreditAvg).toLocaleString('en-IN')}` : 'N/A'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">EMI Outflow (Current Month)</span>
-                    <span className="font-medium text-right">
-                      {monthlyEmiOutflow ? `₹${Number(monthlyEmiOutflow).toLocaleString('en-IN')}` : 'N/A'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Bounce Count (12M)</span>
-                    <span className={`font-medium text-right ${
-                      bounceCountValue > 0 ? 'text-red-600' : 'text-green-600'
-                    }`}>
-                      {bounceCountValue !== null && bounceCountValue !== undefined ? bounceCountValue : 'N/A'}
-                    </span>
-                  </div>
-                </div>
-                {bankAnalyzerSummaryRows.length > 0 && (
-                  <div className="pt-3 mt-3 border-t border-gray-100">
-                    <h4 className="text-sm font-semibold text-gray-900 mb-2">Bank Analyzer Output</h4>
-                    <div className="space-y-1">
-                      {bankAnalyzerSummaryRows.map(([label, value]) => (
-                        <div key={`bank-metric-${label}`} className="flex justify-between items-start text-sm">
-                          <span className="text-gray-600">{label}</span>
-                          <span className="font-medium text-right">{String(value)}</span>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
               </div>
+            )}
+          </Card>
 
-              {/* CREDIT Section */}
-              <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-primary border-b pb-2">Credit</h3>
-                <div className="space-y-3">
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">CIBIL Score</span>
-                    <span className={`text-2xl font-bold text-right ${
-                      features.cibil_score >= 750 ? 'text-green-600' :
-                      features.cibil_score >= 650 ? 'text-yellow-600' :
-                      features.cibil_score ? 'text-red-600' : 'text-gray-400'
-                    }`}>
-                      {features.cibil_score || caseInfo?.cibil_score_manual || 'N/A'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Active Loan Count</span>
-                    <span className="font-medium text-right">{features.active_loan_count || '0'}</span>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Overdue Count</span>
-                    <span className={`font-medium text-right ${
-                      features.overdue_count > 0 ? 'text-red-600' : 'text-green-600'
-                    }`}>
-                      {features.overdue_count !== null && features.overdue_count !== undefined ? features.overdue_count : 'N/A'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-gray-600">Enquiries (6M)</span>
-                    <span className={`font-medium text-right ${
-                      features.enquiry_count_6m > 3 ? 'text-yellow-600' : 'text-gray-900'
-                    }`}>
-                      {features.enquiry_count_6m !== null && features.enquiry_count_6m !== undefined ? features.enquiry_count_6m : 'N/A'}
-                    </span>
-                  </div>
-
-                  <div className="pt-3 mt-3 border-t border-gray-100">
-                    <label className="block text-sm text-gray-600 mb-2">
-                      Manual CIBIL (if report unavailable)
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="number"
-                        min="300"
-                        max="900"
-                        value={manualCibil}
-                        onChange={(e) => setManualCibil(e.target.value)}
-                        placeholder="Enter tentative CIBIL"
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                      />
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          const parsed = Number(manualCibil);
-                          if (!Number.isFinite(parsed) || parsed < 300 || parsed > 900) {
-                            toast.error('Enter a valid CIBIL score between 300 and 900');
-                            return;
-                          }
-                          saveManualCibilMutation.mutate(parsed);
-                        }}
-                        disabled={saveManualCibilMutation.isPending}
-                      >
-                        {saveManualCibilMutation.isPending ? 'Saving...' : 'Save'}
-                      </Button>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-2">
-                      This value is used for scoring when CIBIL document is missing.
-                    </p>
-                  </div>
+          <Card className="transition-all duration-300 hover:shadow-lg border border-slate-200">
+            <h2 className="text-xl font-semibold mb-4 text-slate-900">Business Snapshot</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">Company Name</div>
+                <div className="font-semibold">{caseInfo?.borrower_name || features.full_name || 'N/A'}</div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">Entity Type</div>
+                <div className="font-semibold capitalize">{features.entity_type || caseInfo?.entity_type || 'N/A'}</div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">Business Vintage</div>
+                <div className="font-semibold">
+                  {features.business_vintage_years || caseInfo?.business_vintage_years
+                    ? `${features.business_vintage_years || caseInfo?.business_vintage_years} years`
+                    : 'N/A'}
                 </div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">GSTIN</div>
+                <div className="font-semibold">{features.gstin || caseInfo?.gstin || 'N/A'}</div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">GST Status</div>
+                <div className="font-semibold">{gstStatus || 'N/A'}</div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">Pincode</div>
+                <div className="font-semibold">{features.pincode || caseInfo?.pincode || 'N/A'}</div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3 md:col-span-2">
+                <div className="text-slate-500 text-xs mb-1">Business Address</div>
+                <div className="font-semibold">{caseInfo?.business_address || gstData?.address || 'N/A'}</div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">GST Turnover (API)</div>
+                <div className="font-semibold">{gstTurnover ? `₹${Number(gstTurnover).toLocaleString('en-IN')}` : 'N/A'}</div>
+              </div>
+            </div>
+            {gstFilingHistory.length > 0 && (
+              <div className="mt-4 rounded-md border border-blue-100 bg-blue-50 p-3">
+                <h4 className="text-sm font-semibold text-blue-900 mb-1">Recent GST Filing History</h4>
+                <ul className="text-xs text-blue-900 space-y-1">
+                  {gstFilingHistory.slice(0, 4).map((item, idx) => (
+                    <li key={`gst-history-${idx}`}>
+                      • {typeof item === 'string' ? item : JSON.stringify(item)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </Card>
 
-                {/* Feature Completeness */}
-                <div className="mt-6 pt-4 border-t">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-sm font-medium text-gray-600">Data Completeness</span>
-                    <span className="text-sm font-semibold">
-                      {features.feature_completeness ? `${features.feature_completeness.toFixed(0)}%` : '0%'}
-                    </span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div
-                      className="bg-primary h-2 rounded-full transition-all"
-                      style={{ width: `${features.feature_completeness || 0}%` }}
-                    />
-                  </div>
+          <Card className="transition-all duration-300 hover:shadow-lg border border-slate-200">
+            <h2 className="text-xl font-semibold mb-4 text-slate-900">Credit Health</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">CIBIL Score</div>
+                <div className={`text-2xl font-bold ${
+                  features.cibil_score >= 750 ? 'text-green-600' :
+                    features.cibil_score >= 650 ? 'text-yellow-600' :
+                      features.cibil_score ? 'text-red-600' : 'text-gray-400'
+                }`}>
+                  {features.cibil_score || caseInfo?.cibil_score_manual || 'N/A'}
+                </div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">Active Loans</div>
+                <div className="text-lg font-semibold">{features.active_loan_count || 0}</div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">Overdue Accounts</div>
+                <div className={`text-lg font-semibold ${(features.overdue_count || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                  {features.overdue_count !== null && features.overdue_count !== undefined ? features.overdue_count : 'N/A'}
+                </div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">Enquiries (6M)</div>
+                <div className="text-lg font-semibold">{features.enquiry_count_6m ?? 'N/A'}</div>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+              <div className="rounded-md border border-slate-200 p-3 bg-white">
+                <div className="text-slate-500 text-xs mb-1">Total Outstanding</div>
+                <div className="font-semibold">{totalOutstandingValue ? formatCurrency(totalOutstandingValue) : 'N/A'}</div>
+              </div>
+              <div className="rounded-md border border-slate-200 p-3 bg-white">
+                <div className="text-slate-500 text-xs mb-1">Score Trend</div>
+                <div className="font-semibold">{scoreTrend || 'N/A'}</div>
+              </div>
+              <div className="rounded-md border border-slate-200 p-3 bg-white">
+                <div className="text-slate-500 text-xs mb-1">DPD History</div>
+                <div className="font-semibold">{dpdHistory || 'N/A'}</div>
+              </div>
+              <div className="rounded-md border border-slate-200 p-3 bg-white">
+                <div className="text-slate-500 text-xs mb-1">Active Loan Details</div>
+                <div className="font-semibold">{activeLoanDetails || 'N/A'}</div>
+              </div>
+            </div>
+            <div className="mt-4 rounded-md border border-blue-100 bg-blue-50 p-3">
+              <h4 className="text-sm font-semibold text-blue-900 mb-1">Credit Story</h4>
+              <p className="text-sm text-blue-900">
+                {creditStorySummary || 'Credit narrative will be generated after CIBIL + banking extraction completes.'}
+              </p>
+            </div>
+            <div className="pt-4 mt-4 border-t border-slate-100">
+              <label className="block text-sm text-gray-600 mb-2">
+                Manual CIBIL (if report unavailable)
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  min="300"
+                  max="900"
+                  value={manualCibil}
+                  onChange={(e) => setManualCibil(e.target.value)}
+                  placeholder="Enter tentative CIBIL"
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    const parsed = Number(manualCibil);
+                    if (!Number.isFinite(parsed) || parsed < 300 || parsed > 900) {
+                      toast.error('Enter a valid CIBIL score between 300 and 900');
+                      return;
+                    }
+                    saveManualCibilMutation.mutate(parsed);
+                  }}
+                  disabled={saveManualCibilMutation.isPending}
+                >
+                  {saveManualCibilMutation.isPending ? 'Saving...' : 'Save'}
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="transition-all duration-300 hover:shadow-lg border border-slate-200">
+            <h2 className="text-xl font-semibold mb-4 text-slate-900">Financial Overview</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">Annual Turnover</div>
+                <div className="font-semibold">
+                  {annualTurnoverLakhs ? `₹${Number(annualTurnoverLakhs).toLocaleString('en-IN')} L` : 'N/A'}
+                </div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">Monthly Turnover</div>
+                <div className="font-semibold">
+                  {monthlyTurnoverAmount ? `₹${Number(monthlyTurnoverAmount).toLocaleString('en-IN')}` : 'N/A'}
+                </div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">Avg Monthly Balance (K)</div>
+                <div className="font-semibold">{formatInThousands(avgMonthlyBalance)}</div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">Monthly Credits (Avg)</div>
+                <div className="font-semibold">
+                  {monthlyCreditAvg ? `₹${Number(monthlyCreditAvg).toLocaleString('en-IN')}` : 'N/A'}
+                </div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">EMI Outflow (Monthly)</div>
+                <div className="font-semibold">
+                  {monthlyEmiOutflow ? `₹${Number(monthlyEmiOutflow).toLocaleString('en-IN')}` : 'N/A'}
+                </div>
+              </div>
+              <div className="rounded-md bg-slate-50 border border-slate-100 p-3">
+                <div className="text-slate-500 text-xs mb-1">Bounce Count (12M)</div>
+                <div className={`font-semibold ${(bounceCountValue || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                  {bounceCountValue !== null && bounceCountValue !== undefined ? bounceCountValue : 'N/A'}
                 </div>
               </div>
             </div>
-          )}
-        </Card>
+            {bankAnalyzerSummaryRows.length > 0 && (
+              <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
+                <h4 className="text-sm font-semibold text-slate-900 mb-2">Bank Analyzer Snapshot</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                  {bankAnalyzerSummaryRows.map(([label, value]) => (
+                    <div key={`bank-metric-${label}`} className="flex justify-between items-start">
+                      <span className="text-gray-600">{label}</span>
+                      <span className="font-medium text-right">{String(value)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="mt-4 pt-4 border-t">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-medium text-gray-600">Data Completeness</span>
+                <span className="text-sm font-semibold">
+                  {features.feature_completeness ? `${features.feature_completeness.toFixed(0)}%` : '0%'}
+                </span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div
+                  className="bg-primary h-2 rounded-full transition-all"
+                  style={{ width: `${features.feature_completeness || 0}%` }}
+                />
+              </div>
+            </div>
+          </Card>
+        </div>
       )}
 
       {activeTab === 'eligibility' && (
@@ -1868,25 +1986,18 @@ const CaseDetail = () => {
                   : 'Generate Report'}
               </Button>
               <Button
-                onClick={() => {
-                  queryClient.invalidateQueries({ queryKey: ['case-report', caseId] });
-                  queryClient.invalidateQueries({ queryKey: ['report-whatsapp', caseId] });
-                  queryClient.invalidateQueries({ queryKey: ['report-narrative-comprehensive', caseId] });
-                }}
-                variant="outline"
-              >
-                Refresh Summary
-              </Button>
-              <Button
                 onClick={() => downloadPdfMutation.mutate()}
                 disabled={downloadPdfMutation.isPending}
                 variant="success"
                 className="flex items-center gap-2"
-              >
-                <Download className="w-4 h-4" />
-                {downloadPdfMutation.isPending ? 'Downloading...' : 'Download PDF'}
-              </Button>
+                >
+                  <Download className="w-4 h-4" />
+                  {downloadPdfMutation.isPending ? 'Downloading...' : 'Download PDF'}
+                </Button>
             </div>
+            <p className="text-xs text-blue-700">
+              Report summary auto-refreshes every 10 seconds.
+            </p>
 
             {caseInfo?.status === 'report_generated' && (
               <div className="space-y-4">
@@ -1929,17 +2040,6 @@ const CaseDetail = () => {
                         {caseReport.submission_strategy || 'No strategy generated yet.'}
                       </p>
                     </div>
-                  </div>
-                )}
-
-                {comprehensiveNarrative?.success && (
-                  <div className="p-4 rounded-lg border border-blue-200 bg-blue-50">
-                    <h4 className="font-semibold text-blue-900 mb-2">LLM Summary Journey</h4>
-                    <p className="text-sm text-blue-900 whitespace-pre-wrap">
-                      {comprehensiveNarrative?.sections?.executive_summary ||
-                        comprehensiveNarrative?.narrative ||
-                        'Narrative summary unavailable.'}
-                    </p>
                   </div>
                 )}
 
@@ -2005,35 +2105,47 @@ const CaseDetail = () => {
                       <div className="md:col-span-1 flex items-end gap-2">
                         <Button
                           className="w-full"
-                          onClick={() => { void openMailtoDraft(true); }}
-                          disabled={downloadCaseArchiveMutation.isPending}
+                          onClick={() => { void openMailtoDraft(); }}
+                          disabled={createShareLinkMutation.isPending}
                         >
-                          {downloadCaseArchiveMutation.isPending ? 'Preparing ZIP...' : 'Prepare ZIP + Open Draft'}
+                          {createShareLinkMutation.isPending ? 'Creating Link...' : 'Generate Link + Open Draft'}
                         </Button>
                       </div>
                       <div className="md:col-span-1 flex items-end gap-2">
                         <Button
                           variant="outline"
                           className="w-full"
-                          onClick={() => { void openMailtoDraft(false); }}
+                          onClick={async () => {
+                            try {
+                              const link = await ensureShareLink();
+                              await navigator.clipboard.writeText(link);
+                              toast.success('Secure link copied');
+                            } catch {
+                              toast.error('Unable to copy secure link');
+                            }
+                          }}
                         >
-                          Open Draft Only
+                          Copy Secure Link
                         </Button>
                       </div>
                       <div className="md:col-span-1 flex items-end gap-2">
                         <Button
                           variant="outline"
                           className="w-full"
-                          onClick={() => downloadCaseArchiveMutation.mutate()}
+                          onClick={() => { void openMailtoDraft(); }}
                         >
-                          Download Case ZIP
+                          Open Draft
                         </Button>
                       </div>
                     </div>
                     <p className="text-xs text-gray-500 mt-2">
-                      Browser email compose cannot auto-attach files. Use "Prepare ZIP + Open Draft" for one-click draft
-                      plus ZIP download, then attach the downloaded ZIP in your mail client.
+                      Large attachments are replaced with a secure temporary download link, so sharing works even above email attachment limits.
                     </p>
+                    {shareLinkInfo?.download_url && (
+                      <p className="text-xs text-blue-700 mt-2 break-all">
+                        Latest secure link: {shareLinkInfo.download_url}
+                      </p>
+                    )}
                 </div>
               </div>
             )}

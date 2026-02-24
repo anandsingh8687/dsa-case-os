@@ -23,12 +23,16 @@ class UserCreate(BaseModel):
     full_name: str
     password: str
     organization: Optional[str] = None
+    organization_name: Optional[str] = None
+    role: Optional[str] = None
 
 class UserResponse(BaseModel):
     id: UUID
     email: str
     full_name: str
     role: str
+    organization_id: Optional[UUID] = None
+    organization: Optional[str] = None
     is_active: bool
     created_at: datetime
 
@@ -40,6 +44,8 @@ class TokenResponse(BaseModel):
 # ─── Case ──────────────────────────────────────────────────────
 class CaseCreate(BaseModel):
     borrower_name: Optional[str] = None
+    gstin: Optional[str] = None
+    business_address: Optional[str] = None
     entity_type: Optional[EntityType] = None
     program_type: Optional[ProgramType] = None
     industry_type: Optional[str] = None
@@ -48,6 +54,8 @@ class CaseCreate(BaseModel):
 
 class CaseUpdate(BaseModel):
     borrower_name: Optional[str] = None
+    gstin: Optional[str] = None
+    business_address: Optional[str] = None
     entity_type: Optional[EntityType] = None
     program_type: Optional[ProgramType] = None
     business_vintage_years: Optional[float] = None
@@ -73,6 +81,7 @@ class CaseResponse(BaseModel):
     pincode: Optional[str] = None
     loan_amount_requested: Optional[float] = None
     gstin: Optional[str] = None
+    business_address: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

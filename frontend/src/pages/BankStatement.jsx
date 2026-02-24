@@ -9,9 +9,7 @@ import {
   createCase,
   uploadDocuments,
   getCaseStatus,
-  runExtraction,
-  runScoring,
-  generateReport,
+  triggerCasePipeline,
 } from '../api/services';
 import { Card, Button, ActionButton } from '../components/ui';
 
@@ -197,6 +195,34 @@ const BankStatement = () => {
     return latest;
   };
 
+  const waitForPipelineCompletion = async (targetCaseId, opts = {}) => {
+    const maxAttempts = Number.isFinite(opts.maxAttempts) ? opts.maxAttempts : 420;
+    const pollMs = Number.isFinite(opts.pollMs) ? opts.pollMs : 3000;
+    let latest = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await getCaseStatus(targetCaseId);
+        latest = response?.data;
+        if (typeof opts.onTick === 'function') {
+          opts.onTick(latest?.document_jobs || null);
+        }
+        const statusValue = String(latest?.status || '').toLowerCase();
+        if (statusValue === 'report_generated' || statusValue === 'submitted') {
+          return latest;
+        }
+        if (statusValue === 'failed') {
+          throw new Error('Background pipeline failed');
+        }
+      } catch (error) {
+        if (attempt >= maxAttempts - 1) {
+          throw error;
+        }
+      }
+      await waitMs(pollMs);
+    }
+    throw new Error('Pipeline is taking longer than expected');
+  };
+
   const convertToCaseMutation = useMutation({
     onMutate: () => {
       setConvertPhase('creating_case');
@@ -205,7 +231,7 @@ const BankStatement = () => {
     mutationFn: async () => {
       const borrowerName = convertInput.borrower_name.trim();
       if (!borrowerName) {
-        throw new Error('Borrower name is required to convert into a full case.');
+        throw new Error('Company name is required to convert into a full case.');
       }
 
       const created = await createCase({
@@ -247,9 +273,21 @@ const BankStatement = () => {
         }
         try {
           setConvertPhase('running_pipeline');
-          await withRetry(() => runExtraction(newCaseId));
-          await withRetry(() => runScoring(newCaseId));
-          await withRetry(() => generateReport(newCaseId));
+          let triggerResponse = await withRetry(() => triggerCasePipeline(newCaseId, { force: false }));
+          if (triggerResponse?.data?.status === 'waiting_for_documents') {
+            await waitForDocumentQueue(newCaseId, {
+              maxAttempts: 240,
+              onTick: (jobs) => setConvertQueueStatus(jobs),
+            });
+            triggerResponse = await withRetry(() => triggerCasePipeline(newCaseId, { force: true }));
+          }
+          if (triggerResponse?.data?.status !== 'already_complete') {
+            await waitForPipelineCompletion(newCaseId, {
+              maxAttempts: 420,
+              pollMs: 3000,
+              onTick: (jobs) => setConvertQueueStatus(jobs),
+            });
+          }
           setConvertPhase('done');
         } catch (_) {
           // User can continue from case workspace if background run fails.
@@ -390,11 +428,11 @@ const BankStatement = () => {
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-blue-900 mb-1">Borrower Name</label>
+              <label className="block text-xs text-blue-900 mb-1">Company Name</label>
               <input
                 value={convertInput.borrower_name}
                 onChange={(e) => setConvertInput((prev) => ({ ...prev, borrower_name: e.target.value }))}
-                placeholder="Enter borrower / business name"
+                placeholder="Enter company name"
                 className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm"
               />
             </div>

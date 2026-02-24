@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.latency_metrics import get_latency_snapshot
 from app.core.deps import CurrentAdmin
 from app.db.database import get_db_session
+from app.services.rq_queue import get_queue_snapshot
 
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -99,6 +100,28 @@ class LatencyMetricRow(BaseModel):
     p50_ms: float
     p95_ms: float
     max_ms: float
+
+
+@router.get("/rq")
+async def get_rq_dashboard_snapshot(current_user: CurrentAdmin):
+    """Protected lightweight RQ dashboard snapshot."""
+    if not settings.RQ_ASYNC_ENABLED:
+        return {
+            "enabled": False,
+            "message": "RQ async mode is disabled in environment.",
+            "queues": {},
+        }
+    try:
+        return {
+            "enabled": True,
+            "queues": get_queue_snapshot(),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "enabled": True,
+            "error": str(exc),
+            "queues": {},
+        }
 
 
 @router.get("/stats", response_model=PlatformStats)

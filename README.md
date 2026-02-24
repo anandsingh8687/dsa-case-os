@@ -11,6 +11,28 @@
 
 ## 🚀 Features
 
+## ✅ 2026 Platform Update (Current)
+
+- Multi-tenant organizations with role-based access:
+  - `super_admin`, `dsa_owner`, `agent`
+- Organization management APIs:
+  - `POST /api/v1/organizations`
+  - `POST /api/v1/organizations/{organization_id}/owners`
+  - `POST /api/v1/organizations/{organization_id}/agents`
+- RAG policy intelligence with pgvector:
+  - `POST /api/v1/rag/ingest`
+  - `POST /api/v1/rag/search`
+  - CLI script: `backend/scripts/ingest_lender_docs.py`
+- Redis + RQ background processing path:
+  - Worker entry: `backend/worker.py`
+  - Admin queue snapshot: `GET /api/v1/admin/rq`
+- WhatsApp Cloud API support (primary number: `8130781881`)
+  - Webhook verify: `GET /api/v1/whatsapp/webhook`
+  - Webhook events: `POST /api/v1/whatsapp/webhook`
+  - Cloud send: `POST /api/v1/whatsapp/cloud/send-message`
+- Quick Forward Help page in frontend:
+  - Route: `/quick-forward-help`
+
 ### 🎯 **Core Capabilities**
 - ✅ **Automated Document Processing** - OCR extraction from PDFs, images, bank statements
 - ✅ **Intelligent Classification** - AI-powered document type detection
@@ -37,9 +59,9 @@
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    Frontend (Alpine.js)                  │
-│              Single-page application with                │
-│         Dashboard, Case Management, Reports              │
+│                    Frontend (React + Vite)             │
+│              Single-page application with               │
+│         Dashboard, Case Management, Reports             │
 └────────────────────┬────────────────────────────────────┘
                      │
          ┌───────────▼───────────┐
@@ -96,9 +118,9 @@
 - **Authentication:** JWT tokens
 
 ### **Frontend**
-- **Framework:** Alpine.js (lightweight reactive)
+- **Framework:** React + Vite
 - **UI:** TailwindCSS
-- **Icons:** Heroicons
+- **Icons:** Lucide
 
 ### **Services**
 - **WhatsApp:** Node.js + whatsapp-web.js + Puppeteer
@@ -144,6 +166,24 @@ docker compose up -d
 open http://localhost:8000
 ```
 
+### Background Worker (Required For Queue Mode)
+
+`docker-compose` now includes:
+- `db` (pgvector-enabled Postgres)
+- `redis`
+- `backend`
+- `worker`
+
+Set these env values for queue mode:
+
+```bash
+RQ_ASYNC_ENABLED=true
+REDIS_URL=redis://redis:6379/0
+DOC_QUEUE_ENABLED=false
+```
+
+If `RQ_ASYNC_ENABLED=false`, the legacy in-process DB queue worker is used.
+
 ---
 
 ## 🔧 Configuration
@@ -161,6 +201,16 @@ SECRET_KEY=your-secret-key-here
 LLM_API_KEY=your-kimi-api-key
 LLM_MODEL=kimi-k2.5
 LLM_BASE_URL=https://api.moonshot.cn/v1
+
+# WhatsApp Cloud API (Meta)
+WHATSAPP_CLOUD_ACCESS_TOKEN=...
+WHATSAPP_CLOUD_PHONE_NUMBER_ID=...
+WHATSAPP_CLOUD_VERIFY_TOKEN=credilo-whatsapp-verify
+WHATSAPP_CLOUD_BUSINESS_NUMBER=8130781881
+
+# Queue
+REDIS_URL=redis://localhost:6379/0
+RQ_ASYNC_ENABLED=true
 ```
 
 See `.env.example` for complete list.
@@ -182,12 +232,40 @@ POST   /api/v1/auth/login             - Login and get JWT token
 GET    /api/v1/cases                  - List all cases
 POST   /api/v1/cases                  - Create new case
 POST   /api/v1/cases/{id}/upload      - Upload documents
+POST   /api/v1/cases/{id}/pipeline/trigger - Trigger async full pipeline
 GET    /api/v1/cases/{id}/report      - Get AI-generated report
 POST   /api/v1/copilot/chat           - Chat with lender copilot
 POST   /api/v1/whatsapp/generate-qr   - Generate WhatsApp QR code
 POST   /api/v1/whatsapp/send-message  - Send WhatsApp message
+POST   /api/v1/whatsapp/cloud/send-message - Send via Meta Cloud API
+GET    /api/v1/whatsapp/webhook       - Meta webhook verify
+POST   /api/v1/whatsapp/webhook       - Meta webhook receiver
 POST   /api/v1/bank-statement/process - Process bank statements
+POST   /api/v1/verify/rag             - Validate RAG retrieval quality
+POST   /api/v1/verify/auto            - Validate prefill + async pipeline
 ```
+
+---
+
+## 🚆 Railway Deployment (Updated)
+
+1. Backend service:
+   - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+2. Worker service (same repo, same env):
+   - Start command: `python worker.py`
+3. Add Railway Postgres and Redis services.
+4. Set env vars on backend + worker:
+   - `DATABASE_URL`, `DATABASE_URL_SYNC`, `SECRET_KEY`
+   - `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`
+   - `REDIS_URL`, `RQ_ASYNC_ENABLED=true`, `DOC_QUEUE_ENABLED=false`
+   - `WHATSAPP_CLOUD_ACCESS_TOKEN`, `WHATSAPP_CLOUD_PHONE_NUMBER_ID`, `WHATSAPP_CLOUD_VERIFY_TOKEN`, `WHATSAPP_CLOUD_BUSINESS_NUMBER=8130781881`
+5. Meta webhook setup:
+   - Webhook URL: `https://<backend-domain>/api/v1/whatsapp/webhook`
+   - Verify token: same as `WHATSAPP_CLOUD_VERIFY_TOKEN`
+   - Subscribe message events for the configured phone number ID.
+6. Ingest lender policy docs:
+   - API: `POST /api/v1/rag/ingest`
+   - or script: `python backend/scripts/ingest_lender_docs.py --organization-id <uuid>`
 
 ---
 
@@ -202,6 +280,19 @@ POST   /api/v1/bank-statement/process - Process bank statements
 5. **Review Results** → Check eligibility across 30+ lenders
 6. **Get Report** → AI-generated submission strategy
 7. **Send to Customer** → WhatsApp integration for easy sharing
+
+### **Current Fast Case Flow (GST-first + Async)**
+
+1. `New Case` → choose either:
+   - `Run Quick Scan` (no docs)
+   - `Upload Documents` (GST-first prefill)
+2. On document upload:
+   - GST candidate docs are scanned first
+   - GSTIN is extracted quickly
+   - GST API pre-fills Company Name / Entity / Pincode / Address
+3. Heavy steps (OCR/classification/extraction/scoring/report) run in RQ background queue.
+4. Case detail page shows queue progress and keeps summary/report auto-refreshing.
+5. Email collaboration uses secure temporary share links instead of large attachments.
 
 ### **Copilot Queries:**
 

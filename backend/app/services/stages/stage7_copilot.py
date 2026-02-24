@@ -30,6 +30,7 @@ from app.services.stages.stage7_retriever import (
     QueryType
 )
 from app.db.database import get_db_session
+from app.services.rag_service import search_relevant_lender_chunks
 
 logger = logging.getLogger(__name__)
 CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
@@ -60,6 +61,7 @@ def _sanitize_payload(value: Any) -> Any:
 async def query_copilot(
     query: str,
     user_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
     ui_history: Optional[List[Dict[str, str]]] = None
 ) -> CopilotResponse:
     """Process a natural language query and return an answer.
@@ -86,17 +88,49 @@ async def query_copilot(
             lender_data = await retrieve_lender_data(query_type, params)
             logger.info(f"Retrieved {len(lender_data)} lender records")
 
-        # Step 3: Build LLM prompt and get response (with conversation memory)
-        answer = await _generate_answer(query, query_type, params, lender_data, user_id, ui_history)
+        # Step 3: Retrieve top RAG chunks for org-specific policy context.
+        rag_chunks: List[Dict[str, Any]] = []
+        if organization_id:
+            try:
+                rag_chunks = await search_relevant_lender_chunks(
+                    organization_id=organization_id,
+                    query=query,
+                    top_k=settings.RAG_TOP_K,
+                )
+            except Exception as rag_error:  # noqa: BLE001
+                logger.warning("RAG retrieval failed: %s", rag_error)
+
+        # Step 4: Build LLM prompt and get response (with conversation memory)
+        answer = await _generate_answer(
+            query,
+            query_type,
+            params,
+            lender_data,
+            rag_chunks,
+            user_id,
+            organization_id,
+            ui_history,
+        )
         answer = _sanitize_text(answer)
 
-        # Step 4: Build sources list
+        # Step 5: Build sources list
         sources = _sanitize_payload(_build_sources(lender_data, query_type))
+        if rag_chunks:
+            for row in rag_chunks[: settings.RAG_TOP_K]:
+                sources.append(
+                    {
+                        "type": "policy_rag",
+                        "lender_name": row.get("lender_name"),
+                        "product_type": row.get("product_type"),
+                        "section_title": row.get("section_title"),
+                        "source_file": row.get("source_file"),
+                    }
+                )
 
-        # Step 5: Calculate response time
+        # Step 6: Calculate response time
         response_time_ms = int((time.time() - start_time) * 1000)
 
-        # Step 6: Log the query
+        # Step 7: Log the query
         await _log_query(
             query=query,
             query_type=query_type.value,
@@ -104,7 +138,8 @@ async def query_copilot(
             answer=answer,
             sources_count=len(sources),
             response_time_ms=response_time_ms,
-            user_id=user_id
+            user_id=user_id,
+            organization_id=organization_id,
         )
 
         return CopilotResponse(
@@ -141,7 +176,7 @@ async def _get_copilot_table_columns(db) -> Set[str]:
     )
     return {row["column_name"] for row in rows}
 
-async def _get_conversation_history(user_id: Optional[str]) -> List[Dict[str, str]]:
+async def _get_conversation_history(user_id: Optional[str], organization_id: Optional[str]) -> List[Dict[str, str]]:
     """Retrieve recent conversation history for a user.
 
     Args:
@@ -164,38 +199,64 @@ async def _get_conversation_history(user_id: Optional[str]) -> List[Dict[str, st
                 return []
 
             if "user_id" in columns:
+                org_clause = ""
+                org_params: list[Any] = []
+                if organization_id and "organization_id" in columns:
+                    org_clause = " AND cq.organization_id = $2::uuid"
+                    org_params.append(organization_id)
                 rows = await db.fetch(
                     f"""
                     SELECT cq.{query_col} AS query_value, {response_expr} AS response_value, cq.created_at
                     FROM copilot_queries cq
                     WHERE cq.user_id = $1::uuid
+                    {org_clause}
                     ORDER BY cq.created_at DESC
                     LIMIT 10
                     """,
-                    user_id
+                    user_id,
+                    *org_params,
                 )
             elif "case_id" in columns:
                 # Legacy schema fallback: infer user scope through cases table.
+                org_clause = ""
+                org_params = []
+                if organization_id and "organization_id" in columns:
+                    org_clause = " AND cq.organization_id = $2::uuid"
+                    org_params.append(organization_id)
                 rows = await db.fetch(
                     f"""
                     SELECT cq.{query_col} AS query_value, {response_expr} AS response_value, cq.created_at
                     FROM copilot_queries cq
                     INNER JOIN cases c ON c.id = cq.case_id
                     WHERE c.user_id = $1::uuid
+                    {org_clause}
                     ORDER BY cq.created_at DESC
                     LIMIT 10
                     """,
-                    user_id
+                    user_id,
+                    *org_params,
                 )
             else:
-                rows = await db.fetch(
-                    f"""
-                    SELECT cq.{query_col} AS query_value, {response_expr} AS response_value, cq.created_at
-                    FROM copilot_queries cq
-                    ORDER BY cq.created_at DESC
-                    LIMIT 10
-                    """
-                )
+                if organization_id and "organization_id" in columns:
+                    rows = await db.fetch(
+                        f"""
+                        SELECT cq.{query_col} AS query_value, {response_expr} AS response_value, cq.created_at
+                        FROM copilot_queries cq
+                        WHERE cq.organization_id = $1::uuid
+                        ORDER BY cq.created_at DESC
+                        LIMIT 10
+                        """,
+                        organization_id,
+                    )
+                else:
+                    rows = await db.fetch(
+                        f"""
+                        SELECT cq.{query_col} AS query_value, {response_expr} AS response_value, cq.created_at
+                        FROM copilot_queries cq
+                        ORDER BY cq.created_at DESC
+                        LIMIT 10
+                        """
+                    )
 
             # Convert to conversation format (reverse to get chronological order)
             history = []
@@ -242,7 +303,9 @@ async def _generate_answer(
     query_type: QueryType,
     params: Dict[str, Any],
     lender_data: List[Dict[str, Any]],
+    rag_chunks: List[Dict[str, Any]],
     user_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
     ui_history: Optional[List[Dict[str, str]]] = None
 ) -> str:
     """Generate a natural language answer using Kimi 2.5 API.
@@ -267,11 +330,11 @@ async def _generate_answer(
         return _generate_fallback_answer(query_type, params, lender_data)
 
     # Fetch conversation history for context
-    conversation_history = await _get_conversation_history(user_id) if user_id else []
+    conversation_history = await _get_conversation_history(user_id, organization_id) if user_id else []
     normalized_ui_history = _normalize_ui_history(ui_history)
 
     # Build the prompt
-    prompt = _build_llm_prompt(query, query_type, params, lender_data)
+    prompt = _build_llm_prompt(query, query_type, params, lender_data, rag_chunks)
 
     try:
         # Initialize Kimi client (OpenAI-compatible)
@@ -474,7 +537,8 @@ def _build_llm_prompt(
     query: str,
     query_type: QueryType,
     params: Dict[str, Any],
-    lender_data: List[Dict[str, Any]]
+    lender_data: List[Dict[str, Any]],
+    rag_chunks: List[Dict[str, Any]],
 ) -> str:
     """Build the hybrid prompt combining DB data + general context."""
 
@@ -507,6 +571,21 @@ def _build_llm_prompt(
         prompt_parts.append("\nSince no database records matched, use your general knowledge of Indian business loans to provide a helpful answer.")
         prompt_parts.append("Name specific lenders that typically match these criteria.")
         prompt_parts.append("Mention that these are general guidelines and actual policies may vary by lender.")
+
+    if rag_chunks:
+        rag_payload = [
+            {
+                "lender_name": r.get("lender_name"),
+                "product_type": r.get("product_type"),
+                "section_title": r.get("section_title"),
+                "chunk_text": (r.get("chunk_text") or "")[:1000],
+                "source_file": r.get("source_file"),
+            }
+            for r in rag_chunks[: settings.RAG_TOP_K]
+        ]
+        prompt_parts.append(f"\nRAG POLICY CONTEXT (top {len(rag_payload)} chunks):")
+        prompt_parts.append(json.dumps(rag_payload, default=str))
+        prompt_parts.append("Use this context to cite nuanced policy details when relevant.")
 
     prompt_parts.append(f"\nUSER QUESTION: {query}")
     prompt_parts.append("\nProvide a clear, actionable answer. Be specific with lender names and approximate numbers.")
@@ -712,7 +791,8 @@ async def _log_query(
     answer: str,
     sources_count: int,
     response_time_ms: int,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
 ) -> None:
     """Log the copilot query to the database.
 
@@ -742,6 +822,9 @@ async def _log_query(
             if "user_id" in columns and user_id:
                 insert_columns.append("user_id")
                 insert_values.append(user_id)
+            if "organization_id" in columns and organization_id:
+                insert_columns.append("organization_id")
+                insert_values.append(organization_id)
 
             if "query_text" in columns:
                 insert_columns.append("query_text")

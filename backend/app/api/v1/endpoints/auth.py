@@ -1,6 +1,7 @@
 """Authentication endpoints for user registration, login, and profile."""
 
 from typing import Annotated
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
@@ -10,11 +11,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_user
 from app.core.security import hash_password, verify_password, create_access_token
 from app.db.database import get_db
+from app.models.organization import Organization
 from app.models.user import User
 from app.schemas.shared import UserCreate, UserResponse, TokenResponse
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _slugify(text: str) -> str:
+    value = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return value or "org"
 
 
 # Login request schema
@@ -60,14 +67,32 @@ async def register(
     # Hash the password
     hashed_password = hash_password(user_data.password)
 
+    # Organization bootstrap: self-register creates a DSA owner org.
+    org_name = (user_data.organization_name or user_data.organization or f"{user_data.full_name} Org").strip()
+    slug_base = _slugify(org_name)
+    slug = slug_base
+    suffix = 1
+    while True:
+        existing_org = await db.execute(select(Organization).where(Organization.slug == slug))
+        if not existing_org.scalar_one_or_none():
+            break
+        suffix += 1
+        slug = f"{slug_base}-{suffix}"
+
+    organization = Organization(name=org_name, slug=slug)
+    db.add(organization)
+    await db.flush()
+
     # Create new user
+    role = user_data.role or "dsa_owner"
     new_user = User(
         email=user_data.email,
         hashed_password=hashed_password,
         full_name=user_data.full_name,
         phone=user_data.phone,
         organization=user_data.organization,
-        role="dsa",  # Default role
+        role=role,
+        organization_id=organization.id,
         is_active=True,
     )
 
@@ -81,6 +106,8 @@ async def register(
         email=new_user.email,
         full_name=new_user.full_name,
         role=new_user.role,
+        organization_id=new_user.organization_id,
+        organization=organization.name,
         is_active=new_user.is_active,
         created_at=new_user.created_at,
     )
@@ -131,6 +158,8 @@ async def login(
     access_token = create_access_token(
         user_id=str(user.id),
         email=user.email,
+        organization_id=str(user.organization_id) if user.organization_id else None,
+        role=user.role,
     )
 
     return TokenResponse(
@@ -160,6 +189,8 @@ async def get_me(
         email=current_user.email,
         full_name=current_user.full_name,
         role=current_user.role,
+        organization_id=current_user.organization_id,
+        organization=current_user.organization,
         is_active=current_user.is_active,
         created_at=current_user.created_at,
     )

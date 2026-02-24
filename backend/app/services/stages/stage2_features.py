@@ -102,10 +102,16 @@ class FeatureAssembler:
         # Initialize feature data
         feature_data = {}
 
-        # Group extracted fields by field_name (take first match)
+        # Group extracted fields by field_name.
+        # Prefer highest-confidence non-empty value when duplicates exist.
         extracted_by_name: Dict[str, ExtractedFieldItem] = {}
         for field in extracted_fields:
-            if field.field_name not in extracted_by_name:
+            if not field.field_name:
+                continue
+            if field.field_value is None or str(field.field_value).strip() == "":
+                continue
+            existing = extracted_by_name.get(field.field_name)
+            if not existing or float(field.confidence or 0.0) >= float(existing.confidence or 0.0):
                 extracted_by_name[field.field_name] = field
 
         # Manual overrides from Case table
@@ -161,6 +167,46 @@ class FeatureAssembler:
 
             if final_value is not None:
                 feature_data[vector_attr] = final_value
+
+        def _extracted_float(field_name: str) -> Optional[float]:
+            item = extracted_by_name.get(field_name)
+            if not item:
+                return None
+            try:
+                return float(str(item.field_value).replace(",", "").strip())
+            except (TypeError, ValueError):
+                return None
+
+        # Bank metrics fallback:
+        # If direct analyzer metrics are missing, derive from Credilo summary fields.
+        statement_months = _extracted_float("statement_period_months")
+        if statement_months is None or statement_months <= 0:
+            statement_months = _extracted_float("credilo_statement_count")
+        if statement_months is None or statement_months <= 0:
+            statement_months = 1.0
+
+        if feature_data.get("avg_monthly_balance") is None:
+            avg_balance_fallback = (
+                _extracted_float("credilo_custom_average_balance")
+                or _extracted_float("credilo_average_balance")
+            )
+            if avg_balance_fallback is not None:
+                feature_data["avg_monthly_balance"] = round(avg_balance_fallback, 2)
+
+        if feature_data.get("monthly_credit_avg") is None:
+            monthly_credit_fallback = _extracted_float("credilo_credit_transactions_amount")
+            if monthly_credit_fallback is not None and statement_months > 0:
+                feature_data["monthly_credit_avg"] = round(monthly_credit_fallback / statement_months, 2)
+
+        if feature_data.get("emi_outflow_monthly") is None:
+            emi_fallback = _extracted_float("credilo_total_emi_amount")
+            if emi_fallback is not None and statement_months > 0:
+                feature_data["emi_outflow_monthly"] = round(emi_fallback / statement_months, 2)
+
+        if feature_data.get("bounce_count_12m") is None:
+            bounce_fallback = _extracted_float("credilo_no_of_emi_bounce")
+            if bounce_fallback is not None:
+                feature_data["bounce_count_12m"] = int(round(bounce_fallback))
 
         # TASK 2: Set monthly_turnover = monthly_credit_avg (average of monthly credits)
         if "monthly_credit_avg" in feature_data and feature_data["monthly_credit_avg"] is not None:

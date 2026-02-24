@@ -17,7 +17,8 @@ from app.services.document_queue import document_queue_manager
 from app.api.v1.endpoints import (
     auth, cases, documents, extraction,
     eligibility, reports, copilot, lenders, whatsapp, share, pincodes,
-    flexible_case, batch_upload, bank_statement, admin, quick_scan, commission, leads, submissions
+    flexible_case, batch_upload, bank_statement, admin, quick_scan, commission, leads, submissions,
+    organizations, rag, billing, verify
 )
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,10 @@ app.include_router(quick_scan.router,  prefix=settings.API_PREFIX, tags=["Quick 
 app.include_router(commission.router,  prefix=settings.API_PREFIX, tags=["Commission"])
 app.include_router(leads.router,       prefix=settings.API_PREFIX, tags=["Leads"])
 app.include_router(submissions.router, prefix=settings.API_PREFIX, tags=["Submissions"])
+app.include_router(organizations.router, prefix=settings.API_PREFIX, tags=["Organizations"])
+app.include_router(rag.router, prefix=settings.API_PREFIX, tags=["RAG"])
+app.include_router(billing.router, prefix=settings.API_PREFIX, tags=["Billing"])
+app.include_router(verify.router, prefix=settings.API_PREFIX, tags=["Verify"])
 
 
 # ─── Static Frontend ─────────────────────────────────────────

@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     container_name: dsa_case_os_db
     environment:
       POSTGRES_USER: ${DB_USER:-postgres}
@@ -24,7 +24,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      whatsapp:
+      redis:
         condition: service_started
     env_file:
       - ../backend/.env
@@ -38,12 +38,49 @@ services:
       STORAGE_BACKEND: local
       LOCAL_STORAGE_PATH: /app/uploads
       WHATSAPP_SERVICE_URL: http://whatsapp:3001
+      REDIS_URL: redis://redis:6379/0
+      RQ_ASYNC_ENABLED: "true"
     ports:
       - "8000:8000"
     volumes:
       - ../backend:/app
       - upload_data:/app/uploads
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: dsa_case_os_worker
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file:
+      - ../backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@db:5432/${DB_NAME:-dsa_case_os}
+      DATABASE_URL_SYNC: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@db:5432/${DB_NAME:-dsa_case_os}
+      SECRET_KEY: ${SECRET_KEY:-dsa-case-os-dev-key}
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_PATH: /app/uploads
+      REDIS_URL: redis://redis:6379/0
+      RQ_ASYNC_ENABLED: "true"
+      DOC_QUEUE_ENABLED: "false"
+    volumes:
+      - ../backend:/app
+      - upload_data:/app/uploads
+    command: python worker.py
+
+  redis:
+    image: redis:7-alpine
+    container_name: dsa_case_os_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
 
   whatsapp:
     build:
@@ -64,3 +101,4 @@ volumes:
   postgres_data:
   upload_data:
   whatsapp_data:
+  redis_data:

@@ -15,6 +15,7 @@ class Case(Base):
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     case_id = Column(String(20), unique=True, nullable=False, index=True)
     user_id = Column(PGUUID(as_uuid=True), nullable=False, index=True)
+    organization_id = Column(PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True)
     status = Column(String(30), nullable=False, default="created", index=True)
     program_type = Column(String(10), nullable=True)
 
@@ -32,6 +33,7 @@ class Case(Base):
     gstin = Column(String(15), nullable=True, index=True)
     gst_data = Column(JSONB, nullable=True)
     gst_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    business_address = Column(Text, nullable=True)
 
     # WhatsApp integration
     whatsapp_number = Column(String(20), nullable=True, index=True)
@@ -51,6 +53,7 @@ class Case(Base):
     document_processing_jobs = relationship("DocumentProcessingJob", back_populates="case", cascade="all, delete-orphan")
     extracted_fields = relationship("ExtractedField", back_populates="case", cascade="all, delete-orphan")
     borrower_features = relationship("BorrowerFeature", back_populates="case", cascade="all, delete-orphan")
+    share_links = relationship("CaseShareLink", back_populates="case", cascade="all, delete-orphan")
 
 
 class Document(Base):
@@ -59,6 +62,7 @@ class Document(Base):
 
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     case_id = Column(PGUUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    organization_id = Column(PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # File info
     original_filename = Column(String(512), nullable=True)
@@ -91,6 +95,7 @@ class DocumentProcessingJob(Base):
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     case_id = Column(PGUUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
     document_id = Column(PGUUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    organization_id = Column(PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True)
     status = Column(String(20), nullable=False, default="queued", index=True)  # queued | processing | completed | failed
     attempts = Column(Integer, nullable=False, default=0)
     max_attempts = Column(Integer, nullable=False, default=2)
@@ -111,6 +116,7 @@ class ExtractedField(Base):
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     case_id = Column(PGUUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
     document_id = Column(PGUUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=True, index=True)
+    organization_id = Column(PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Field metadata
     field_name = Column(String(100), nullable=False, index=True)
@@ -130,6 +136,7 @@ class BorrowerFeature(Base):
 
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     case_id = Column(PGUUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    organization_id = Column(PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Identity
     full_name = Column(String(255), nullable=True)
@@ -170,12 +177,32 @@ class BorrowerFeature(Base):
     case = relationship("Case", back_populates="borrower_features")
 
 
+class CaseShareLink(Base):
+    """Secure temporary public links for sharing case document ZIP downloads."""
+    __tablename__ = "case_share_links"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    case_id = Column(PGUUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    organization_id = Column(PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_by_user_id = Column(PGUUID(as_uuid=True), nullable=True, index=True)
+    token_hash = Column(String(128), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    max_downloads = Column(Integer, nullable=False, default=10)
+    download_count = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    last_accessed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    case = relationship("Case", back_populates="share_links")
+
+
 class WhatsAppMessage(Base):
     """Stores WhatsApp messages for per-case chat integration."""
     __tablename__ = "whatsapp_messages"
 
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     case_id = Column(PGUUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    organization_id = Column(PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Message details
     message_id = Column(String(100), nullable=True, index=True)

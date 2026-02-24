@@ -36,6 +36,15 @@ export const getCaseDocumentsArchive = (caseId) =>
     responseType: 'blob',
   });
 
+export const createCaseDocumentsShareLink = (caseId, payload = {}) =>
+  apiClient.post(`/cases/${caseId}/documents/share-link`, payload);
+
+export const smartCaseSearch = (query, limit = 20) =>
+  apiClient.get('/cases/search/smart', {
+    params: { q: query, limit },
+    timeout: 20000,
+  });
+
 export const updateCase = (caseId, data) =>
   apiClient.patch(`/cases/${caseId}`, data);
 
@@ -50,6 +59,9 @@ export const uploadDocuments = (caseId, formData, config = {}) =>
 
 export const getCaseStatus = (caseId) =>
   apiClient.get(`/cases/${caseId}/status`);
+
+export const triggerCasePipeline = (caseId, payload = {}) =>
+  apiClient.post(`/cases/${caseId}/pipeline/trigger`, payload);
 
 export const getDocumentChecklist = (caseId, programType) =>
   apiClient.get(`/cases/${caseId}/checklist`, {

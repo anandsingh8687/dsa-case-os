@@ -31,13 +31,12 @@ const Sidebar = () => {
   return (
     <div className="w-64 bg-gray-900 text-white h-screen fixed left-0 top-0 overflow-y-auto">
       <div className="p-6">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center justify-center">
           <img
             src={crediloLogo}
             alt="Credilo logo"
-            className="w-9 h-9 rounded-lg object-cover border border-gray-700 bg-gray-800"
+            className="w-16 h-16 rounded-2xl object-cover border border-gray-700 bg-gray-800 shadow-lg"
           />
-          <h1 className="text-2xl font-bold text-primary">Credilo</h1>
         </div>
       </div>
 

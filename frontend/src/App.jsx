@@ -20,6 +20,7 @@ import PincodeChecker from './pages/PincodeChecker';
 import QuickScan from './pages/QuickScan';
 import AdminPanel from './pages/AdminPanel';
 import BankStatement from './pages/BankStatement';
+import QuickForwardHelp from './pages/QuickForwardHelp';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -151,6 +152,16 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <BankStatement />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/quick-forward-help"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <QuickForwardHelp />
                 </Layout>
               </ProtectedRoute>
             }

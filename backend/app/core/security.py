@@ -40,7 +40,12 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 
-def create_access_token(user_id: str, email: str) -> str:
+def create_access_token(
+    user_id: str,
+    email: str,
+    organization_id: Optional[str] = None,
+    role: Optional[str] = None,
+) -> str:
     """
     Create a JWT access token for a user.
 
@@ -60,6 +65,8 @@ def create_access_token(user_id: str, email: str) -> str:
     payload = {
         "sub": user_id,  # subject (user ID)
         "email": email,
+        "organization_id": organization_id,
+        "role": role,
         "exp": expire,   # expiration time
         "iat": datetime.now(timezone.utc),  # issued at
     }

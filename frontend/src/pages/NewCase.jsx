@@ -9,10 +9,7 @@ import {
   createCase,
   updateCase,
   uploadDocuments,
-  getCaseStatus,
-  runExtraction,
-  runScoring,
-  generateReport,
+  triggerCasePipeline,
 } from '../api/services';
 import {
   Button,
@@ -43,9 +40,9 @@ const PROGRAM_OPTIONS = [
 ];
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const isRetryableStatusCode = (statusCode) => [408, 409, 429, 500, 502, 503, 504].includes(Number(statusCode));
+const GSTIN_PATTERN = /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]$/i;
 
-const getBorrowerNameFromGst = (gstPayload) => {
+const getCompanyNameFromGst = (gstPayload) => {
   if (!gstPayload || typeof gstPayload !== 'object') return '';
   const candidates = [
     gstPayload.borrower_name,
@@ -58,6 +55,29 @@ const getBorrowerNameFromGst = (gstPayload) => {
   ];
   return candidates.find((value) => typeof value === 'string' && value.trim())?.trim() || '';
 };
+
+const getBusinessAddressFromGst = (gstPayload) => {
+  if (!gstPayload || typeof gstPayload !== 'object') return '';
+  const candidates = [
+    gstPayload.address,
+    gstPayload.principal_address,
+    gstPayload.principal_place,
+    gstPayload.pradr_address,
+  ];
+  const direct = candidates.find((value) => typeof value === 'string' && value.trim());
+  if (direct) return String(direct).trim();
+  const pradr = gstPayload?.raw_response?.pradr;
+  if (pradr && typeof pradr === 'object') {
+    const composed = ['bno', 'bnm', 'st', 'loc', 'dst', 'stcd', 'pncd']
+      .map((key) => (pradr[key] ? String(pradr[key]).trim() : ''))
+      .filter(Boolean)
+      .join(', ');
+    if (composed) return composed;
+  }
+  return '';
+};
+
+const isValidGstin = (value) => GSTIN_PATTERN.test(String(value || '').trim().toUpperCase());
 
 const toCasePayload = (data) => {
   const normalized = { ...data };
@@ -84,12 +104,15 @@ const NewCase = () => {
   const [uploadPhase, setUploadPhase] = useState('idle');
   const [uploadElapsedSeconds, setUploadElapsedSeconds] = useState(0);
   const [uploadEstimateMinutes, setUploadEstimateMinutes] = useState(0);
+  const [manualWithoutGst, setManualWithoutGst] = useState(false);
+  const [lastLookedUpGstin, setLastLookedUpGstin] = useState('');
 
   const {
     register,
     handleSubmit,
     formState: { errors },
     setValue,
+    watch,
   } = useForm();
 
   const quickScanPrefill = location.state?.quickScanPrefill || null;
@@ -102,51 +125,6 @@ const NewCase = () => {
       toast.error(error.response?.data?.detail || 'Failed to update case');
     },
   });
-
-  const runPostUploadPipeline = async (targetCaseId) => {
-    const withRetry = async (fn) => {
-      try {
-        return await fn();
-      } catch (error) {
-        if (!isRetryableStatusCode(error?.response?.status)) {
-          throw error;
-        }
-        await wait(1200);
-        return fn();
-      }
-    };
-
-    try {
-      const queueState = await waitForDocumentJobs(targetCaseId);
-      await checkForGSTData(targetCaseId);
-
-      if (!queueState) {
-        toast('Documents are still processing. Open the case from dashboard and run pipeline once processing reaches 100%.', {
-          icon: 'ℹ️',
-        });
-        return;
-      }
-
-      const failedJobs = Number(queueState?.document_jobs?.failed || 0);
-      if (failedJobs > 0) {
-        toast(`Document processing finished with ${failedJobs} failed file(s). You can re-upload those files from case workspace.`, {
-          icon: '⚠️',
-        });
-      }
-
-      setUploadPhase('finishing');
-      await withRetry(() => runExtraction(targetCaseId));
-      await withRetry(() => runScoring(targetCaseId));
-      await withRetry(() => generateReport(targetCaseId));
-      toast.success('All processing stages completed automatically.');
-    } catch (error) {
-      const details = error?.response?.data?.detail;
-      if (details) {
-        console.warn('[NewCase] Auto pipeline warning:', details);
-      }
-      toast('Upload done. You can continue processing from case workspace.', { icon: 'ℹ️' });
-    }
-  };
 
   const createCaseMutation = useMutation({
     mutationFn: createCase,
@@ -177,29 +155,6 @@ const NewCase = () => {
     );
   };
 
-  const waitForDocumentJobs = async (targetCaseId) => {
-    const maxAttempts = 180; // ~6 minutes with 2-second polling
-    let latestData = null;
-
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      try {
-        const response = await getCaseStatus(targetCaseId);
-        latestData = response?.data;
-        const jobs = response?.data?.document_jobs;
-        if (jobs && typeof jobs.completion_pct === 'number') {
-          setUploadProgress(Math.min(100, jobs.completion_pct));
-        }
-        if (!jobs || jobs.total === 0 || jobs.in_progress === false) {
-          return latestData;
-        }
-      } catch (error) {
-        // Keep polling even if one attempt fails.
-      }
-      await wait(2000);
-    }
-    return latestData;
-  };
-
   const uploadMutation = useMutation({
     onMutate: ({ totalFileBytes }) => {
       const estimate = Math.max(2, Math.ceil(totalFileBytes / (5 * 1024 * 1024)));
@@ -226,20 +181,20 @@ const NewCase = () => {
         },
       }),
     onSuccess: async (_response, variables) => {
-      toast.success('Documents uploaded. Background processing has started.');
+      toast.success('Documents uploaded. Analyzing documents in background… You can continue.');
       setUploadProgress(100);
       setUploadPhase('server_processing');
       setFileProgress((prev) => prev.map((entry) => ({ ...entry, progress: 100 })));
       void checkForGSTData(variables.caseId, { maxAttempts: 30, pollDelayMs: 1500 });
+      void triggerCasePipeline(variables.caseId, { force: false }).catch(() => {
+        // OCR jobs may still be in progress; pipeline trigger can be retried later from case detail.
+      });
 
       if (workflowMode === 'docs-first') {
         setStep(2);
       } else {
         setStep(3);
       }
-
-      // Trigger downstream stages only after async OCR/classification queue is done.
-      void runPostUploadPipeline(variables.caseId);
     },
     onError: (error) => {
       setUploadPhase('idle');
@@ -288,16 +243,19 @@ const NewCase = () => {
   const autoFillFromGST = () => {
     if (!gstData) return;
 
-    const borrowerName = getBorrowerNameFromGst(gstData);
-    if (borrowerName) {
-      setValue('borrower_name', borrowerName);
+    const companyName = getCompanyNameFromGst(gstData);
+    if (companyName) {
+      setValue('borrower_name', companyName);
     }
+    if (gstData.gstin) setValue('gstin', String(gstData.gstin).toUpperCase());
     if (gstData.entity_type) {
       setValue('entity_type', gstData.entity_type);
     }
     if (gstData.pincode) {
       setValue('pincode', gstData.pincode);
     }
+    const businessAddress = getBusinessAddressFromGst(gstData);
+    if (businessAddress) setValue('business_address', businessAddress);
 
     toast.success('Form pre-filled from GST data!');
     if (workflowMode === 'form-first') {
@@ -407,16 +365,19 @@ const NewCase = () => {
   useEffect(() => {
     if (!gstData) return;
 
-    const borrowerName = getBorrowerNameFromGst(gstData);
-    if (borrowerName) {
-      setValue('borrower_name', borrowerName);
+    const companyName = getCompanyNameFromGst(gstData);
+    if (companyName) {
+      setValue('borrower_name', companyName);
     }
+    if (gstData.gstin) setValue('gstin', String(gstData.gstin).toUpperCase());
     if (gstData.entity_type) {
       setValue('entity_type', gstData.entity_type);
     }
     if (gstData.pincode) {
       setValue('pincode', String(gstData.pincode));
     }
+    const businessAddress = getBusinessAddressFromGst(gstData);
+    if (businessAddress) setValue('business_address', businessAddress);
   }, [gstData, setValue]);
 
   useEffect(() => {
@@ -430,10 +391,51 @@ const NewCase = () => {
   }, [uploadMutation.isPending]);
 
   const uploadPhaseLabel = uploadPhase === 'server_processing'
-    ? 'Files uploaded. OCR, classification, and GST checks are running on server.'
+    ? 'Analyzing documents in background… You can continue.'
     : uploadPhase === 'finishing'
       ? 'Finalizing extracted data and preparing next step...'
       : 'Uploading files...';
+
+  const lookupAndAutofillByGstin = async (rawValue) => {
+    const normalized = String(rawValue || '').trim().toUpperCase();
+    if (!isValidGstin(normalized)) return;
+    if (normalized === lastLookedUpGstin) return;
+
+    setIsCheckingGST(true);
+    try {
+      const response = await apiClient.get(`/cases/gst/lookup/${normalized}`);
+      const apiGst = response?.data?.gst_data;
+      if (!apiGst) return;
+      setLastLookedUpGstin(normalized);
+      setGstData(apiGst);
+      setValue('gstin', normalized);
+
+      const companyName = getCompanyNameFromGst(apiGst);
+      if (companyName) setValue('borrower_name', companyName);
+      if (apiGst.entity_type) setValue('entity_type', apiGst.entity_type);
+      if (apiGst.pincode) setValue('pincode', String(apiGst.pincode));
+      const businessAddress = getBusinessAddressFromGst(apiGst);
+      if (businessAddress) setValue('business_address', businessAddress);
+      toast.success('GST verified and company details auto-filled.');
+    } catch (error) {
+      toast.error(error?.response?.data?.detail || 'Unable to fetch GST details');
+    } finally {
+      setIsCheckingGST(false);
+    }
+  };
+
+  const watchedGstin = watch('gstin');
+  useEffect(() => {
+    if (manualWithoutGst) return undefined;
+    const normalized = String(watchedGstin || '').trim().toUpperCase();
+    if (!isValidGstin(normalized) || normalized === lastLookedUpGstin) return undefined;
+
+    const timer = window.setTimeout(() => {
+      void lookupAndAutofillByGstin(normalized);
+    }, 500);
+
+    return () => window.clearTimeout(timer);
+  }, [watchedGstin, manualWithoutGst, lastLookedUpGstin]);
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -466,9 +468,9 @@ const NewCase = () => {
               <WorkflowOptionCard
                 icon={Upload}
                 title="Upload Documents"
-                description="Upload GST and bank docs first. We detect GSTIN and auto-fill borrower details."
+                description="Upload GST and bank docs first. We detect GSTIN and auto-fill company details."
                 highlights={[
-                  'Auto-fills borrower trade/legal name',
+                  'Auto-fills company trade/legal name',
                   'Auto-fills entity type and pincode',
                   'Calculates business vintage',
                   'Saves time and reduces errors',
@@ -542,20 +544,62 @@ const NewCase = () => {
           <form onSubmit={handleSubmit(handleStep1Submit)}>
             <div className="relative">
               <Input
-                label="Borrower Name"
-                placeholder="Enter borrower name"
+                label="GST Number"
+                placeholder="Enter 15-character GSTIN"
+                error={errors.gstin?.message}
+                {...register('gstin', {
+                  validate: (value) => {
+                    if (manualWithoutGst) return true;
+                    if (!value || !String(value).trim()) return 'GST Number is required';
+                    return isValidGstin(value) || 'Enter a valid GST Number';
+                  },
+                })}
+                onBlur={(event) => {
+                  const value = event.target.value;
+                  if (isValidGstin(value)) {
+                    void lookupAndAutofillByGstin(value);
+                  }
+                }}
+              />
+            </div>
+            <div className="mb-2">
+              <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={manualWithoutGst}
+                  onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setManualWithoutGst(enabled);
+                    if (enabled) {
+                      setLastLookedUpGstin('');
+                      setValue('gstin', '');
+                    }
+                  }}
+                />
+                No GST available, continue with manual company details
+              </label>
+            </div>
+            <div className="relative">
+              <Input
+                label="Company Name"
+                placeholder="Enter company name"
                 error={errors.borrower_name?.message}
                 {...register('borrower_name', {
-                  required: 'Borrower name is required',
+                  required: 'Company name is required',
                 })}
               />
-              {gstData && getBorrowerNameFromGst(gstData) && (
+              {gstData && getCompanyNameFromGst(gstData) && (
                 <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
                   <CheckCircle className="w-3 h-3" />
                   Auto-filled from GST
                 </p>
               )}
             </div>
+            <Input
+              label="Address"
+              placeholder="Auto-filled from GST when available"
+              {...register('business_address')}
+            />
 
             <div className="relative">
               <Select
@@ -945,20 +989,62 @@ const NewCase = () => {
           })}>
             <div className="relative">
               <Input
-                label="Borrower Name"
-                placeholder="Enter borrower name"
+                label="GST Number"
+                placeholder="Enter 15-character GSTIN"
+                error={errors.gstin?.message}
+                {...register('gstin', {
+                  validate: (value) => {
+                    if (manualWithoutGst) return true;
+                    if (!value || !String(value).trim()) return 'GST Number is required';
+                    return isValidGstin(value) || 'Enter a valid GST Number';
+                  },
+                })}
+                onBlur={(event) => {
+                  const value = event.target.value;
+                  if (isValidGstin(value)) {
+                    void lookupAndAutofillByGstin(value);
+                  }
+                }}
+              />
+            </div>
+            <div className="mb-2">
+              <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={manualWithoutGst}
+                  onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setManualWithoutGst(enabled);
+                    if (enabled) {
+                      setLastLookedUpGstin('');
+                      setValue('gstin', '');
+                    }
+                  }}
+                />
+                No GST available, continue with manual company details
+              </label>
+            </div>
+            <div className="relative">
+              <Input
+                label="Company Name"
+                placeholder="Enter company name"
                 error={errors.borrower_name?.message}
                 {...register('borrower_name', {
-                  required: 'Borrower name is required',
+                  required: 'Company name is required',
                 })}
               />
-              {gstData && getBorrowerNameFromGst(gstData) && (
+              {gstData && getCompanyNameFromGst(gstData) && (
                 <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
                   <CheckCircle className="w-3 h-3" />
                   Auto-filled from GST
                 </p>
               )}
             </div>
+            <Input
+              label="Address"
+              placeholder="Auto-filled from GST when available"
+              {...register('business_address')}
+            />
 
             <div className="relative">
               <Select

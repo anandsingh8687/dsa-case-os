@@ -1204,6 +1204,9 @@ async def save_eligibility_results(
         results: List of eligibility results to save
     """
     async with get_db_session() as db:
+        case_row = await db.fetchrow("SELECT organization_id FROM cases WHERE id = $1", case_id)
+        organization_id = case_row["organization_id"] if case_row else None
+
         # Delete existing results for this case
         await db.execute(
             "DELETE FROM eligibility_results WHERE case_id = $1",
@@ -1244,6 +1247,7 @@ async def save_eligibility_results(
                 """
                 INSERT INTO eligibility_results (
                     case_id,
+                    organization_id,
                     lender_product_id,
                     hard_filter_status,
                     hard_filter_details,
@@ -1254,9 +1258,10 @@ async def save_eligibility_results(
                     confidence,
                     missing_for_improvement,
                     rank
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 """,
                 case_id,
+                organization_id,
                 lender_product_id,
                 result.hard_filter_status.value,
                 hard_details_json,

@@ -40,6 +40,7 @@ async def query_copilot(
         response = await process_copilot_query(
             query=query_data.query,
             user_id=user_id,
+            organization_id=str(current_user.organization_id) if current_user and current_user.organization_id else None,
             ui_history=[item.model_dump() for item in query_data.history] if query_data.history else None
         )
 
