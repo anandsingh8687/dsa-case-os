@@ -63,6 +63,8 @@ async def ingest_rag_documents(
             source_paths=source_paths,
         )
         return {"status": "success", **result}
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"RAG ingestion failed: {exc}") from exc
 
@@ -79,5 +81,7 @@ async def search_rag(
             top_k=payload.top_k or 8,
         )
         return {"status": "success", "count": len(rows), "results": rows}
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"RAG search failed: {exc}") from exc
