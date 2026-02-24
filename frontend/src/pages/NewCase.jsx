@@ -321,6 +321,8 @@ const NewCase = () => {
 
       const minimalData = {
         borrower_name: shouldUseBorrowerName ? incomingBorrowerName : undefined,
+        gstin: seedData.gstin || undefined,
+        business_address: seedData.business_address || undefined,
         entity_type: seedData.entity_type || 'proprietorship',
         program_type: seedData.program_type || 'banking',
         pincode: seedData.pincode || undefined,
@@ -337,6 +339,12 @@ const NewCase = () => {
       setStep(1); // Go to upload step
       if (minimalData.borrower_name) {
         setValue('borrower_name', minimalData.borrower_name);
+      }
+      if (minimalData.gstin) {
+        setValue('gstin', String(minimalData.gstin).toUpperCase());
+      }
+      if (minimalData.business_address) {
+        setValue('business_address', minimalData.business_address);
       }
       setValue('entity_type', minimalData.entity_type);
       setValue('program_type', minimalData.program_type);

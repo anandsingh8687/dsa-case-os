@@ -134,14 +134,29 @@ class WhatsAppCloudService:
         normalized = normalize_phone(phone_number)
         last10 = normalized[-10:] if len(normalized) >= 10 else normalized
         async with async_session_maker() as db:
-            row = await db.execute(select(User).where(User.phone.isnot(None)))
+            row = await db.execute(
+                select(User)
+                .where(
+                    User.phone.isnot(None),
+                    User.is_active.is_(True),
+                    User.organization_id.isnot(None),
+                )
+                .order_by(User.created_at.desc())
+            )
             users = row.scalars().all()
+            candidates: list[tuple[int, int, User]] = []
+            role_priority = {"dsa_owner": 3, "agent": 2, "admin": 1, "super_admin": 0}
             for user in users:
                 user_phone = normalize_phone(user.phone or "")
                 if not user_phone:
                     continue
-                if user_phone == normalized or user_phone.endswith(last10):
-                    return user
+                if user_phone == normalized:
+                    candidates.append((2, role_priority.get(user.role, 0), user))
+                elif last10 and user_phone.endswith(last10):
+                    candidates.append((1, role_priority.get(user.role, 0), user))
+            if candidates:
+                candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+                return candidates[0][2]
         return None
 
     async def _handle_public_message(self, from_number: str, body_text: str) -> None:
@@ -229,8 +244,10 @@ class WhatsAppCloudService:
         await self.send_text_message(from_number, "Use /newcase, /status, /report or forward documents to start processing.")
 
     async def _resolve_case_for_message(self, user: User, body_text: str, profile_name: str) -> Case | None:
+        first_line = ((body_text or "").strip().splitlines() or [""])[0]
+        case_hint_text = f"{first_line}\n{body_text or ''}"
         async with async_session_maker() as db:
-            case_id_match = CASE_ID_RE.search(body_text or "")
+            case_id_match = CASE_ID_RE.search(case_hint_text)
             if case_id_match:
                 case_id = case_id_match.group(0).upper()
                 row = await db.execute(
@@ -243,7 +260,7 @@ class WhatsAppCloudService:
                 if case:
                     return case
 
-            pan_match = PAN_RE.search((body_text or "").upper())
+            pan_match = PAN_RE.search(case_hint_text.upper())
             if pan_match:
                 pan = pan_match.group(0)
                 row = await db.execute(
@@ -271,6 +288,7 @@ class WhatsAppCloudService:
                     select(Case)
                     .where(
                         Case.organization_id == user.organization_id,
+                        Case.user_id == user.id,
                         Case.borrower_name.ilike(f"%{profile_name}%"),
                     )
                     .order_by(Case.updated_at.desc())
@@ -281,10 +299,25 @@ class WhatsAppCloudService:
 
             row = await db.execute(
                 select(Case)
-                .where(Case.organization_id == user.organization_id)
+                .where(
+                    Case.organization_id == user.organization_id,
+                    Case.user_id == user.id,
+                )
                 .order_by(Case.updated_at.desc())
             )
-            return row.scalars().first()
+            case = row.scalars().first()
+            if case:
+                return case
+
+            # DSA owner fallback: allow latest org case if no self-owned case exists.
+            if user.role in {"dsa_owner", "super_admin"}:
+                row = await db.execute(
+                    select(Case)
+                    .where(Case.organization_id == user.organization_id)
+                    .order_by(Case.updated_at.desc())
+                )
+                return row.scalars().first()
+            return None
 
     async def _create_case_for_user(self, user: User, borrower_name: str) -> Case:
         async with async_session_maker() as db:

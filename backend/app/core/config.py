@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     WHATSAPP_CLOUD_BUSINESS_NUMBER: str = os.getenv("WHATSAPP_CLOUD_BUSINESS_NUMBER", "8130781881")
     WHATSAPP_CLOUD_VERIFY_TOKEN: str = os.getenv("WHATSAPP_CLOUD_VERIFY_TOKEN", "credilo-whatsapp-verify")
     WHATSAPP_CLOUD_API_VERSION: str = os.getenv("WHATSAPP_CLOUD_API_VERSION", "v21.0")
+    WHATSAPP_CLOUD_ONLY: bool = os.getenv("WHATSAPP_CLOUD_ONLY", "true").lower() == "true"
 
     # RAG
     RAG_EMBEDDING_MODEL: str = os.getenv("RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")

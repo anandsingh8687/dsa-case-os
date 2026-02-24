@@ -63,6 +63,9 @@ export const getCaseStatus = (caseId) =>
 export const triggerCasePipeline = (caseId, payload = {}) =>
   apiClient.post(`/cases/${caseId}/pipeline/trigger`, payload);
 
+export const lookupGstDetails = (gstin) =>
+  apiClient.get(`/cases/gst/lookup/${encodeURIComponent(gstin)}`);
+
 export const getDocumentChecklist = (caseId, programType) =>
   apiClient.get(`/cases/${caseId}/checklist`, {
     params: { program_type: programType },

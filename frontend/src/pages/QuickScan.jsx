@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -8,11 +8,15 @@ import {
   runQuickScan,
   getQuickScanCard,
   getQuickScanKnowledgeBaseStats,
+  lookupGstDetails,
 } from '../api/services';
 import { Button, Card, Loading, Badge } from '../components/ui';
 import { formatCurrency } from '../utils/format';
 
 const defaultForm = {
+  gstin: '',
+  company_name: '',
+  business_address: '',
   loan_type: 'BL',
   cibil_score: 720,
   monthly_income_or_turnover: 12,
@@ -21,11 +25,73 @@ const defaultForm = {
   pincode: '560001',
 };
 
+const GSTIN_PATTERN = /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]$/i;
+
+const isValidGstin = (value) => GSTIN_PATTERN.test(String(value || '').trim().toUpperCase());
+
+const normalizeEntityType = (value) => {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_');
+  const map = {
+    proprietorship: 'proprietorship',
+    proprietary: 'proprietorship',
+    sole_proprietorship: 'proprietorship',
+    partnership: 'partnership',
+    llp: 'llp',
+    private_limited: 'pvt_ltd',
+    private_ltd: 'pvt_ltd',
+    pvt_ltd: 'pvt_ltd',
+    pvt_limited: 'pvt_ltd',
+  };
+  return map[normalized] || 'proprietorship';
+};
+
+const getCompanyNameFromGst = (gstPayload) => {
+  if (!gstPayload || typeof gstPayload !== 'object') return '';
+  const candidates = [
+    gstPayload.borrower_name,
+    gstPayload.tradename,
+    gstPayload.trade_name,
+    gstPayload.tradeName,
+    gstPayload.name,
+    gstPayload.legal_name,
+    gstPayload.legalName,
+  ];
+  return candidates.find((value) => typeof value === 'string' && value.trim())?.trim() || '';
+};
+
+const getBusinessAddressFromGst = (gstPayload) => {
+  if (!gstPayload || typeof gstPayload !== 'object') return '';
+  const candidates = [
+    gstPayload.address,
+    gstPayload.principal_address,
+    gstPayload.principal_place,
+    gstPayload.pradr_address,
+  ];
+  const direct = candidates.find((value) => typeof value === 'string' && value.trim());
+  if (direct) return String(direct).trim();
+  const pradr = gstPayload?.raw_response?.pradr;
+  if (pradr && typeof pradr === 'object') {
+    const composed = ['bno', 'bnm', 'st', 'loc', 'dst', 'stcd', 'pncd']
+      .map((key) => (pradr[key] ? String(pradr[key]).trim() : ''))
+      .filter(Boolean)
+      .join(', ');
+    if (composed) return composed;
+  }
+  return '';
+};
+
 const QuickScan = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [form, setForm] = useState(defaultForm);
   const [scanResult, setScanResult] = useState(null);
+  const [manualWithoutGst, setManualWithoutGst] = useState(false);
+  const [isCheckingGST, setIsCheckingGST] = useState(false);
+  const [gstData, setGstData] = useState(null);
+  const [lastLookedUpGstin, setLastLookedUpGstin] = useState('');
   const launchedFromNewCase = Boolean(location.state?.fromNewCase);
 
   const { data: kbStatsData } = useQuery({
@@ -78,8 +144,65 @@ const QuickScan = () => {
   const plCount = kbStats?.by_loan_type?.PL || 0;
   const hlCount = kbStats?.by_loan_type?.HL || 0;
 
+  const lookupAndAutofillByGstin = async (rawGstin) => {
+    const normalized = String(rawGstin || '').trim().toUpperCase();
+    if (!isValidGstin(normalized)) return;
+    if (normalized === lastLookedUpGstin) return;
+
+    setIsCheckingGST(true);
+    try {
+      const response = await lookupGstDetails(normalized);
+      const payload = response?.data?.gst_data;
+      if (!payload) {
+        toast.error('GST details not found for this GSTIN');
+        return;
+      }
+
+      const companyName = getCompanyNameFromGst(payload);
+      const businessAddress = getBusinessAddressFromGst(payload);
+      const pincode = String(payload?.pincode || '').replace(/\D/g, '').slice(0, 6);
+      const entity = normalizeEntityType(payload?.entity_type);
+
+      setGstData(payload);
+      setLastLookedUpGstin(normalized);
+      setForm((prev) => ({
+        ...prev,
+        gstin: normalized,
+        company_name: companyName || prev.company_name,
+        business_address: businessAddress || prev.business_address,
+        entity_type_or_employer: entity || prev.entity_type_or_employer,
+        pincode: pincode || prev.pincode,
+      }));
+      toast.success('GST details auto-filled');
+    } catch (error) {
+      toast.error(error?.response?.data?.detail || 'Unable to fetch GST details');
+    } finally {
+      setIsCheckingGST(false);
+    }
+  };
+
+  useEffect(() => {
+    if (manualWithoutGst) return undefined;
+    const normalized = String(form.gstin || '').trim().toUpperCase();
+    if (!isValidGstin(normalized) || normalized === lastLookedUpGstin) return undefined;
+    const timer = window.setTimeout(() => {
+      void lookupAndAutofillByGstin(normalized);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [form.gstin, manualWithoutGst, lastLookedUpGstin]);
+
   const onSubmit = (event) => {
     event.preventDefault();
+
+    if (!manualWithoutGst) {
+      if (!isValidGstin(form.gstin)) {
+        toast.error('Valid GST Number is required');
+        return;
+      }
+    } else if (!String(form.company_name || '').trim()) {
+      toast.error('Company Name is required when GST is unavailable');
+      return;
+    }
 
     if (!/^\d{6}$/.test(form.pincode)) {
       toast.error('Pincode must be a 6-digit number');
@@ -96,9 +219,13 @@ const QuickScan = () => {
   };
 
   const convertToCase = () => {
+    const companyName = String(form.company_name || '').trim();
     navigate('/cases/new', {
       state: {
         quickScanPrefill: {
+          borrower_name: companyName || undefined,
+          gstin: !manualWithoutGst ? String(form.gstin || '').trim().toUpperCase() : undefined,
+          business_address: form.business_address || undefined,
           entity_type: isBusinessLoan ? form.entity_type_or_employer : 'proprietorship',
           program_type: form.loan_type === 'PL' ? 'income' : form.loan_type === 'HL' ? 'hybrid' : 'banking',
           pincode: form.pincode,
@@ -137,7 +264,7 @@ const QuickScan = () => {
       <Card>
         <h1 className="text-2xl font-bold text-gray-900 mb-2">Instant Eligibility Quick Scan</h1>
         <p className="text-sm text-gray-600 mb-6">
-          Run a 30-second BL/PL/HL eligibility snapshot before creating a full case.
+          Start with GST for auto-fill, then run a 30-second BL/PL/HL eligibility snapshot before creating a full case.
         </p>
         {kbStats && (
           <div className="mb-6 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-900">
@@ -147,6 +274,69 @@ const QuickScan = () => {
         )}
 
         <form onSubmit={onSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-3">
+            <label className="block text-sm font-medium text-gray-700 mb-1">GST Number</label>
+            <input
+              type="text"
+              maxLength={15}
+              value={form.gstin}
+              onChange={(e) => setForm((prev) => ({ ...prev, gstin: e.target.value.toUpperCase() }))}
+              onBlur={(e) => {
+                if (!manualWithoutGst && isValidGstin(e.target.value)) {
+                  void lookupAndAutofillByGstin(e.target.value);
+                }
+              }}
+              placeholder="Enter 15-character GSTIN"
+              disabled={manualWithoutGst}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 disabled:bg-gray-100"
+            />
+            <label className="mt-2 inline-flex items-center gap-2 text-xs text-gray-600">
+              <input
+                type="checkbox"
+                checked={manualWithoutGst}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  setManualWithoutGst(enabled);
+                  setGstData(null);
+                  setLastLookedUpGstin('');
+                  if (enabled) {
+                    setForm((prev) => ({ ...prev, gstin: '' }));
+                  }
+                }}
+              />
+              No GST available, continue with manual company details
+            </label>
+            {isCheckingGST && (
+              <p className="mt-1 text-xs text-blue-700">Fetching GST details and auto-filling company fields...</p>
+            )}
+          </div>
+
+          <div className="lg:col-span-2">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Company Name</label>
+            <input
+              type="text"
+              value={form.company_name}
+              onChange={(e) => setForm((prev) => ({ ...prev, company_name: e.target.value }))}
+              placeholder="Enter company name"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2"
+              required={manualWithoutGst}
+            />
+            {gstData && getCompanyNameFromGst(gstData) && (
+              <p className="mt-1 text-xs text-green-700">Auto-filled from GST</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Business Address</label>
+            <input
+              type="text"
+              value={form.business_address}
+              onChange={(e) => setForm((prev) => ({ ...prev, business_address: e.target.value }))}
+              placeholder="Auto-filled from GST"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2"
+            />
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Loan Type</label>
             <select
@@ -258,6 +448,9 @@ const QuickScan = () => {
               onClick={() => {
                 setForm(defaultForm);
                 setScanResult(null);
+                setGstData(null);
+                setManualWithoutGst(false);
+                setLastLookedUpGstin('');
               }}
             >
               Reset

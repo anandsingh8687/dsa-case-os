@@ -133,9 +133,12 @@ class ChatHistoryResponse(BaseModel):
 @router.get("/health")
 async def whatsapp_health_check():
     """Check if WhatsApp service is running."""
-    legacy_healthy = await whatsapp_client.health_check()
+    legacy_healthy = False
+    if not settings.WHATSAPP_CLOUD_ONLY:
+        legacy_healthy = await whatsapp_client.health_check()
     return {
         "status": "ok",
+        "cloud_only_mode": settings.WHATSAPP_CLOUD_ONLY,
         "legacy_service_running": legacy_healthy,
         "cloud_api_configured": whatsapp_cloud_service.configured,
         "primary_number": "8130781881",
@@ -153,6 +156,12 @@ async def generate_qr_code(
     The QR code can be scanned with WhatsApp to link the user's WhatsApp
     to this specific case.
     """
+    if settings.WHATSAPP_CLOUD_ONLY:
+        raise HTTPException(
+            status_code=410,
+            detail="QR-based WhatsApp sessions are disabled. Use Meta Cloud API via 8130781881.",
+        )
+
     logger.info(f"User {current_user.id} generating QR for case {request.case_id}")
 
     # TODO: Verify case belongs to current_user
@@ -184,6 +193,12 @@ async def get_session_status(
     current_user: CurrentUser
 ):
     """Get status of a WhatsApp session."""
+    if settings.WHATSAPP_CLOUD_ONLY:
+        raise HTTPException(
+            status_code=410,
+            detail="Session status is unavailable in cloud-only mode.",
+        )
+
     result = await whatsapp_client.get_session_status(session_id)
 
     if 'error' in result:
@@ -217,10 +232,46 @@ async def send_whatsapp_message(
 
     Requires the case to have an active WhatsApp session.
     """
-    # TODO: Get session_id from case in database
-    # For now, assuming session_id is stored
-
     from app.db.database import get_db_session
+
+    if settings.WHATSAPP_CLOUD_ONLY:
+        if not whatsapp_cloud_service.configured:
+            raise HTTPException(status_code=503, detail="WhatsApp Cloud API is not configured")
+
+        async with get_db_session() as db:
+            row = await db.fetchrow(
+                """
+                SELECT case_id
+                FROM cases
+                WHERE case_id = $1
+                  AND (organization_id = $2 OR user_id = $3)
+                """,
+                request.case_id,
+                current_user.organization_id,
+                current_user.id,
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="Case not found")
+
+        result = await whatsapp_cloud_service.send_text_message(request.to, request.message)
+        if not result.get("success"):
+            return SendMessageResponse(
+                success=False,
+                error=result.get("error", "Failed to send message"),
+            )
+
+        message_id = (((result.get("data") or {}).get("messages") or [{}])[0]).get("id")
+        await save_whatsapp_message(
+            case_id_str=request.case_id,
+            message_id=message_id,
+            from_number=settings.WHATSAPP_CLOUD_BUSINESS_NUMBER,
+            to_number=request.to,
+            message_body=request.message,
+            direction='outbound',
+            message_type='text',
+            status='sent'
+        )
+        return SendMessageResponse(success=True, message_id=message_id)
 
     async with get_db_session() as db:
         query = """
@@ -238,7 +289,6 @@ async def send_whatsapp_message(
 
         session_id = row['whatsapp_session_id']
 
-    # Send message via WhatsApp service
     result = await whatsapp_client.send_message(
         session_id=session_id,
         to=request.to,
@@ -342,6 +392,12 @@ async def disconnect_whatsapp(
     current_user: CurrentUser
 ):
     """Disconnect WhatsApp session for a case."""
+    if settings.WHATSAPP_CLOUD_ONLY:
+        raise HTTPException(
+            status_code=410,
+            detail="Session disconnect is unavailable in cloud-only mode.",
+        )
+
     from app.db.database import get_db_session
 
     async with get_db_session() as db:

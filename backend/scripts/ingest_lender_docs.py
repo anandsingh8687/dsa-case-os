@@ -38,11 +38,23 @@ async def main() -> None:
         "--sources",
         nargs="*",
         default=None,
-        help="Override source paths. If omitted, the two default ZIP paths are used and sibling docs are auto-scanned.",
+        help="Override source paths. If omitted, only the two default policy ZIP paths (and their extracted folders, if present) are scanned.",
+    )
+    parser.add_argument(
+        "--reset-existing",
+        action="store_true",
+        help="Delete existing lender_documents rows for this organization before ingestion.",
     )
     args = parser.parse_args()
 
     org_id = await _resolve_org_id(args.organization_id)
+    if args.reset_existing:
+        pool = await get_asyncpg_pool()
+        async with pool.acquire() as db:
+            await db.execute(
+                "DELETE FROM lender_documents WHERE organization_id = $1",
+                org_id,
+            )
     result = await ingest_lender_policy_documents(
         organization_id=org_id,
         source_paths=args.sources or list(DEFAULT_POLICY_SOURCES),
@@ -52,4 +64,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-

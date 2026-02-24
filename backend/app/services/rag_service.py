@@ -39,6 +39,30 @@ SUPPORTED_DOC_EXTENSIONS = {".pdf", ".txt", ".md"}
 _EMBED_MODEL: SentenceTransformer | None = None
 _TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_/\\-]*")
 _EMBED_DIM = 384
+KNOWN_LENDER_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
+    ("Aditya Birla Finance", ("aditya birla", "abfl")),
+    ("Arthmate", ("arthmate",)),
+    ("Ambit", ("ambit",)),
+    ("Bajaj", ("bajaj",)),
+    ("Clix Capital", ("clix",)),
+    ("Credit Saison", ("credit saison", "saison")),
+    ("Flexiloans", ("flexiloans", "flexi loans")),
+    ("Godrej Capital", ("godrej",)),
+    ("HDFC", ("hdfc",)),
+    ("IIFL", ("iifl",)),
+    ("Indifi", ("indifi",)),
+    ("Lendingkart", ("lendingkart",)),
+    ("NeoGrowth", ("neogrowth", "neo growth")),
+    ("Protium", ("protium",)),
+    ("Tata Capital", ("tata capital", "tata")),
+]
+KNOWN_PRODUCT_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
+    ("Working Capital", ("working capital", "wc")),
+    ("Home Loan", ("home loan", "hl", "htbl")),
+    ("Personal Loan", ("personal loan", "pl")),
+    ("Loan Against Property", ("loan against property", "lap")),
+    ("Business Loan", ("business loan", "bl", "stbl", "mtbl", "od", "sbl")),
+]
 
 
 @dataclass
@@ -113,6 +137,32 @@ def _chunk_text_by_tokens(text: str, min_tokens: int = 500, max_tokens: int = 80
     return chunks
 
 
+def _guess_lender_name(text: str) -> str | None:
+    haystack = f" {text.lower()} "
+    for lender_name, aliases in KNOWN_LENDER_PATTERNS:
+        for alias in aliases:
+            if f" {alias} " in haystack or alias in haystack:
+                return lender_name
+    return None
+
+
+def _guess_product_type(text: str) -> str | None:
+    haystack = f" {text.lower()} "
+    for product_name, aliases in KNOWN_PRODUCT_PATTERNS:
+        for alias in aliases:
+            if f" {alias} " in haystack or alias in haystack:
+                return product_name
+    return None
+
+
+def _looks_like_invalid_lender_name(value: str) -> bool:
+    normalized = (value or "").strip()
+    if not normalized:
+        return True
+    letters = re.sub(r"[^A-Za-z]", "", normalized)
+    return len(letters) < 3
+
+
 def _extract_pdf_text(path: Path) -> str:
     text_parts: list[str] = []
     doc = fitz.open(path)
@@ -126,9 +176,12 @@ def _extract_pdf_text(path: Path) -> str:
 
 async def _infer_lender_product(filename: str, context_text: str) -> tuple[str, str]:
     base = Path(filename).stem.replace("_", " ").replace("-", " ")
+    context_window = f"{base} {context_text[:6000]}"
+    guessed_lender = _guess_lender_name(context_window)
+    guessed_product = _guess_product_type(context_window)
     tokens = [t for t in base.split() if t]
-    fallback_lender = tokens[0].title() if tokens else "Unknown Lender"
-    fallback_product = "Business Loan"
+    fallback_lender = guessed_lender or (tokens[0].title() if tokens else "Unknown Lender")
+    fallback_product = guessed_product or "Business Loan"
 
     # Simple filename heuristics first.
     lower = base.lower()
@@ -191,6 +244,11 @@ async def _infer_lender_product(filename: str, context_text: str) -> tuple[str, 
         parsed = _extract_json_object(raw)
         lender_name = (parsed.get("lender_name") or fallback_lender).strip()
         product_type = (parsed.get("product_type") or fallback_product).strip()
+        if _looks_like_invalid_lender_name(lender_name):
+            lender_name = guessed_lender or fallback_lender
+        guessed_final_product = _guess_product_type(f"{product_type} {base} {context_text[:2000]}")
+        if guessed_final_product:
+            product_type = guessed_final_product
         return lender_name, product_type
     except Exception as exc:  # noqa: BLE001
         logger.warning("LLM metadata inference failed for %s: %s", filename, exc)
@@ -324,17 +382,26 @@ async def search_relevant_lender_chunks(
 
 
 def _iter_policy_candidate_files(base_paths: Iterable[str]) -> list[Path]:
-    """Collect policy files from given ZIPs/folders and sibling directories."""
+    """Collect policy files from explicit ZIPs/folders only.
+
+    Important: this intentionally avoids sweeping entire parent folders
+    (for example ~/Downloads) to prevent accidental ingestion of unrelated docs.
+    """
     candidates: set[Path] = set()
 
     for raw_path in base_paths:
         path = Path(raw_path).expanduser()
+        if not path.exists():
+            logger.warning("RAG source path does not exist: %s", path)
+            continue
+
         if path.is_file() and path.suffix.lower() == ".zip":
             candidates.add(path)
-            parent = path.parent
-            for sibling in parent.iterdir():
-                if sibling.is_file() and sibling.suffix.lower() in SUPPORTED_DOC_EXTENSIONS | {".zip"}:
-                    candidates.add(sibling)
+            extracted_dir = path.with_suffix("")
+            if extracted_dir.exists() and extracted_dir.is_dir():
+                for file in extracted_dir.rglob("*"):
+                    if file.is_file() and file.suffix.lower() in SUPPORTED_DOC_EXTENSIONS | {".zip"}:
+                        candidates.add(file)
         elif path.is_dir():
             for file in path.rglob("*"):
                 if file.is_file() and file.suffix.lower() in SUPPORTED_DOC_EXTENSIONS | {".zip"}:
@@ -471,45 +538,46 @@ async def ingest_lender_policy_documents(
     pool = await get_asyncpg_pool()
     async with pool.acquire() as db:
         has_table, has_vector_column = await _rag_capabilities(db)
-        if not has_table:
-            return {
-                "organization_id": str(organization_id),
-                "candidate_files": len(candidates),
-                "processed_files": 0,
-                "inserted_chunks": 0,
-                "skipped_files": len(candidates),
-                "source_paths": paths,
-                "status": "skipped",
-                "reason": "lender_documents table is unavailable",
-                "ingested_at": datetime.utcnow().isoformat() + "Z",
-            }
+    if not has_table:
+        return {
+            "organization_id": str(organization_id),
+            "candidate_files": len(candidates),
+            "processed_files": 0,
+            "inserted_chunks": 0,
+            "skipped_files": len(candidates),
+            "source_paths": paths,
+            "status": "skipped",
+            "reason": "lender_documents table is unavailable",
+            "ingested_at": datetime.utcnow().isoformat() + "Z",
+        }
 
-        for source in candidates:
-            try:
-                if source.suffix.lower() == ".zip":
-                    with zipfile.ZipFile(source, "r") as zf:
-                        with tempfile.TemporaryDirectory(prefix="rag_ingest_") as td:
-                            for member in zf.infolist():
-                                if member.is_dir():
-                                    continue
-                                member_name = Path(member.filename).name
-                                if not member_name:
-                                    continue
-                                member_suffix = Path(member_name).suffix.lower()
-                                if member_suffix not in SUPPORTED_DOC_EXTENSIONS:
-                                    continue
+    for source in candidates:
+        try:
+            if source.suffix.lower() == ".zip":
+                with zipfile.ZipFile(source, "r") as zf:
+                    with tempfile.TemporaryDirectory(prefix="rag_ingest_") as td:
+                        for member in zf.infolist():
+                            if member.is_dir():
+                                continue
+                            member_name = Path(member.filename).name
+                            if not member_name:
+                                continue
+                            member_suffix = Path(member_name).suffix.lower()
+                            if member_suffix not in SUPPORTED_DOC_EXTENSIONS:
+                                continue
 
-                                extracted_file = Path(td) / member_name
-                                with zf.open(member) as src, extracted_file.open("wb") as dst:
-                                    dst.write(src.read())
+                            extracted_file = Path(td) / member_name
+                            with zf.open(member) as src, extracted_file.open("wb") as dst:
+                                dst.write(src.read())
 
-                                text = (
-                                    _extract_pdf_text(extracted_file)
-                                    if member_suffix == ".pdf"
-                                    else extracted_file.read_text(
-                                    encoding="utf-8", errors="ignore"
-                                    )
+                            text = (
+                                _extract_pdf_text(extracted_file)
+                                if member_suffix == ".pdf"
+                                else extracted_file.read_text(
+                                encoding="utf-8", errors="ignore"
                                 )
+                            )
+                            async with pool.acquire() as db:
                                 inserted_chunks += await _ingest_file_content(
                                     organization_id=organization_id,
                                     source_file=Path(f"{source.name}:{member.filename}"),
@@ -517,11 +585,12 @@ async def ingest_lender_policy_documents(
                                     db=db,
                                     has_vector_column=has_vector_column,
                                 )
-                                processed_files += 1
-                elif source.suffix.lower() in SUPPORTED_DOC_EXTENSIONS:
-                    text = _extract_pdf_text(source) if source.suffix.lower() == ".pdf" else source.read_text(
-                        encoding="utf-8", errors="ignore"
-                    )
+                            processed_files += 1
+            elif source.suffix.lower() in SUPPORTED_DOC_EXTENSIONS:
+                text = _extract_pdf_text(source) if source.suffix.lower() == ".pdf" else source.read_text(
+                    encoding="utf-8", errors="ignore"
+                )
+                async with pool.acquire() as db:
                     inserted_chunks += await _ingest_file_content(
                         organization_id=organization_id,
                         source_file=source,
@@ -529,12 +598,12 @@ async def ingest_lender_policy_documents(
                         db=db,
                         has_vector_column=has_vector_column,
                     )
-                    processed_files += 1
-                else:
-                    skipped_files += 1
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to ingest %s: %s", source, exc)
+                processed_files += 1
+            else:
                 skipped_files += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to ingest %s: %s", source, exc)
+            skipped_files += 1
 
     return {
         "organization_id": str(organization_id),
