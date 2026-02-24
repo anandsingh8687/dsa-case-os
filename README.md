@@ -211,6 +211,7 @@ WHATSAPP_CLOUD_BUSINESS_NUMBER=8130781881
 # Queue
 REDIS_URL=redis://localhost:6379/0
 RQ_ASYNC_ENABLED=true
+DOC_QUEUE_WORKER_CONCURRENCY=1
 ```
 
 See `.env.example` for complete list.

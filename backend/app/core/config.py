@@ -64,7 +64,7 @@ class Settings(BaseSettings):
 
     # Async document processing worker queue
     DOC_QUEUE_ENABLED: bool = os.getenv("DOC_QUEUE_ENABLED", "true").lower() == "true"
-    DOC_QUEUE_WORKER_CONCURRENCY: int = int(os.getenv("DOC_QUEUE_WORKER_CONCURRENCY", "3"))
+    DOC_QUEUE_WORKER_CONCURRENCY: int = int(os.getenv("DOC_QUEUE_WORKER_CONCURRENCY", "1"))
     DOC_QUEUE_POLL_INTERVAL_MS: int = int(os.getenv("DOC_QUEUE_POLL_INTERVAL_MS", "750"))
     DOC_QUEUE_MAX_ATTEMPTS: int = int(os.getenv("DOC_QUEUE_MAX_ATTEMPTS", "2"))
 

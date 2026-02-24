@@ -50,7 +50,9 @@ class DocumentQueueManager:
             return
 
         self._stop_event.clear()
-        concurrency = max(1, settings.DOC_QUEUE_WORKER_CONCURRENCY)
+        # Guard memory on small Railway instances. Can still be increased via env,
+        # but keep sane upper bound for in-process OCR workers.
+        concurrency = min(2, max(1, settings.DOC_QUEUE_WORKER_CONCURRENCY))
         for idx in range(concurrency):
             task = asyncio.create_task(self._worker_loop(idx + 1))
             self._tasks.append(task)
