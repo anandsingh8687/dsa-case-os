@@ -11,7 +11,12 @@ from pydantic import BaseModel
 from app.core.deps import CurrentSuperAdmin
 from app.core.config import settings
 from app.services.rq_queue import enqueue_rag_ingestion_job
-from app.services.rag_service import DEFAULT_POLICY_SOURCES, ingest_lender_policy_documents, search_relevant_lender_chunks
+from app.services.rag_service import (
+    DEFAULT_POLICY_SOURCES,
+    ingest_lender_policy_documents,
+    resolve_policy_candidate_files,
+    search_relevant_lender_chunks,
+)
 
 router = APIRouter(prefix="/rag", tags=["rag"])
 
@@ -34,6 +39,15 @@ async def ingest_rag_documents(
 ):
     try:
         source_paths = payload.source_paths or list(DEFAULT_POLICY_SOURCES)
+        resolved_candidates = resolve_policy_candidate_files(source_paths)
+        if not resolved_candidates:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No readable policy documents found for provided source_paths on this runtime. "
+                    "Use accessible server paths or run backend/scripts/ingest_lender_docs.py from your machine."
+                ),
+            )
         if settings.RQ_ASYNC_ENABLED:
             rq_job_id = enqueue_rag_ingestion_job(str(payload.organization_id), source_paths)
             return {
@@ -41,6 +55,7 @@ async def ingest_rag_documents(
                 "job_id": rq_job_id,
                 "organization_id": str(payload.organization_id),
                 "source_paths": source_paths,
+                "resolved_candidates": len(resolved_candidates),
             }
 
         result = await ingest_lender_policy_documents(

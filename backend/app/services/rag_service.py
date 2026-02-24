@@ -425,6 +425,12 @@ def _iter_policy_candidate_files(base_paths: Iterable[str]) -> list[Path]:
     return sorted(candidates)
 
 
+def resolve_policy_candidate_files(source_paths: Optional[list[str]] = None) -> list[str]:
+    """Return resolved candidate files for an ingestion request."""
+    paths = source_paths or list(DEFAULT_POLICY_SOURCES)
+    return [str(path) for path in _iter_policy_candidate_files(paths)]
+
+
 async def _ingest_file_content(
     *,
     organization_id: UUID,
