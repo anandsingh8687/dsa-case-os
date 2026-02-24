@@ -49,8 +49,18 @@ KNOWN_LENDER_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
     ("Flexiloans", ("flexiloans", "flexi loans")),
     ("Godrej Capital", ("godrej",)),
     ("HDFC", ("hdfc",)),
+    ("IDFC First Bank", ("idfc", "idfc first")),
+    ("ICICI", ("icici",)),
+    ("SBI", ("sbi", "state bank of india")),
+    ("InCred", ("incred",)),
     ("IIFL", ("iifl",)),
     ("Indifi", ("indifi",)),
+    ("KreditBee", ("kreditbee", "kredit bee")),
+    ("Moneyview", ("moneyview", "money view")),
+    ("Muthoot Finance", ("muthoot",)),
+    ("Prefr", ("prefr",)),
+    ("Fibe", ("fibe",)),
+    ("TruCap", ("trucap", "tru cap")),
     ("Lendingkart", ("lendingkart",)),
     ("NeoGrowth", ("neogrowth", "neo growth")),
     ("Protium", ("protium",)),
@@ -185,6 +195,7 @@ async def _infer_lender_product(filename: str, context_text: str) -> tuple[str, 
 
     # Simple filename heuristics first.
     lower = base.lower()
+    filename_lower = filename.lower()
     if "home" in lower or "hl" in lower:
         fallback_product = "Home Loan"
     elif "personal" in lower or "pl" in lower:
@@ -192,6 +203,8 @@ async def _infer_lender_product(filename: str, context_text: str) -> tuple[str, 
     elif "working capital" in lower or "wc" in lower:
         fallback_product = "Working Capital"
     elif "bl" in lower or "business" in lower:
+        fallback_product = "Business Loan"
+    elif "policies bl" in filename_lower or "/bl" in filename_lower or "\\bl" in filename_lower:
         fallback_product = "Business Loan"
 
     if not settings.LLM_API_KEY:
@@ -423,7 +436,7 @@ async def _ingest_file_content(
     if not text.strip():
         return 0
 
-    lender_name, product_type = await _infer_lender_product(source_file.name, text[:2000])
+    lender_name, product_type = await _infer_lender_product(str(source_file), text[:2000])
     chunks = _chunk_text_by_tokens(text)
     if not chunks:
         return 0
